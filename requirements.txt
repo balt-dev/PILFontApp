@@ -1,0 +1,6 @@
+pysdl2
+pysdl2-dll
+imgui[sdl2]~=1.4.1
+Pillow~=9.4.0
+numpy
+PyOpenGL
