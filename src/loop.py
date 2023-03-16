@@ -216,7 +216,7 @@ class Loop:
                                         y2 = int(y2 * self.zoom + self.offset[1] + offset)
                                         x, y = imgui.get_mouse_pos()
                                         x, y = int(x), int(y)
-                                        if x in range(x1, x2) and y in range(y1, y2):
+                                        if imgui.is_window_focused() and x in range(x1, x2) and y in range(y1, y2):
                                             draw_list.add_rect_filled(
                                                 x1, y1, x2, y2,
                                                 imgui.get_color_u32_rgba(*button_color, 0.3)
@@ -233,6 +233,7 @@ class Loop:
                                                 imgui.text(f"Glyph: {char if ord(char) >= 32 else '?'} (U+{hex(ord(char))[2:].upper():>02})")
                                                 imgui.text(f"Source UV: {glyph.src_bbox}")
                                                 imgui.text(f"Offset: {glyph.dst_bbox}")
+                                                imgui.text(f"Delta: {glyph.delta}")
                                                 imgui.image(
                                                     self.font_id,
                                                     (u2 - u1) * self.zoom,

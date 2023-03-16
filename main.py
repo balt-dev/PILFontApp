@@ -13,7 +13,7 @@ def chrdecode(exc):
 
 def main():
     codecs.register_error("chrdecode", chrdecode)
-    window, ctx = init_context(1280, 720)
+    window, ctx = init_context("PIL Font Editor", 1280, 720)
     imgui.create_context()
     impl = sdl2.SDL2Renderer(window)
     running_loop = Loop(ctx, window, impl)

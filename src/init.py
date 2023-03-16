@@ -1,12 +1,12 @@
 import sdl2
 
 
-def init_context(width: int, height: int):
+def init_context(name: str, width: int, height: int):
     """
     Boilerplate code to initiaize a SDL2 context.
     Taken from https://github.com/pyimgui/pyimgui/blob/master/doc/examples/integrations_pysdl2.py
     """
-    window_name = b"minimal ImGui/SDL2 example"
+    window_name = name.encode("utf-8", "ignore")
 
     if sdl2.SDL_Init(sdl2.SDL_INIT_EVERYTHING) < 0:
         print("Error: SDL could not initialize! SDL Error: " + sdl2.SDL_GetError().decode("utf-8"))
