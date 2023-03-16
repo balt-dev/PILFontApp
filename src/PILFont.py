@@ -1,8 +1,10 @@
 import struct
 from os import PathLike
+
+import PIL
 from PIL import Image
-from typing import IO, Tuple, Iterable, Self
-from dataclasses import dataclass
+from typing import IO, Tuple, Iterable
+from dataclasses import dataclass, field
 
 
 def _check_header(fp: IO, expected: bytes):
@@ -51,9 +53,9 @@ class PILFont:
         The index of a glyph corresponds to its ASCII table index.
     """
 
-    atlas: Image
-    ysize: int
-    glyphs: Iterable[Glyph]
+    atlas: Image.Image | None = None
+    ysize: int | None = None
+    glyphs: Iterable[Glyph] = field(default_factory = lambda: [None for _ in range(256)])
 
     def __getitem__(self, index: int):
         return self.glyphs[index]
@@ -62,37 +64,45 @@ class PILFont:
     def load(
         cls, 
         metrics_path: str | bytes | PathLike, 
-        image_path: str | bytes | PathLike
-    ) -> Self:
+        image_path: str | bytes | PathLike | None = None
+    ):
         """
         Loads a PIL font from a file to an object.
 
         @:param metrics_path: A path to the .pil file.
         @:param image_path: A path to the glyph atlas.
         """
-        with Image.open(image_path) as glyph_atlas:
-            with open(metrics_path, "rb") as f:
-                _check_header(f, b"PILfont\n;;;;;;")
-                ysize = int(f.read(2))
-                _check_header(f, b";\nDATA\n")
-                glyphs = []
-                for i, raw_glyph in enumerate(iter(lambda: f.read(20), b"")):
-                    if not len(raw_glyph):
-                        break
-                    (
-                        dx, dy,
-                        dx0, dy0, dx1, dy1, 
-                        sx0, sy0, sx1, sy1
-                    ) = struct.unpack("!10h", raw_glyph)
-                    glyphs.append(
-                        Glyph(
-                            i.to_bytes(1, "little"),
-                            (dx, dy),
-                            (sx0, sy0, sx1, sy1),
-                            (dx0, dy0, dx1, dy1),
-                        )
+        atlas = None
+        if image_path is not None:
+            try:
+                with Image.open(image_path) as glyph_atlas:
+                    atlas = glyph_atlas.copy()
+            except PIL.UnidentifiedImageError:
+                raise PILFontParsingError(f"Atlas image at {image_path} is invalid")
+        with open(metrics_path, "rb") as f:
+            _check_header(f, b"PILfont\n;;;;;;")
+            ysize = int(f.read(2))
+            _check_header(f, b";\nDATA\n")
+            glyphs = []
+            for i, raw_glyph in enumerate(iter(lambda: f.read(20), b"")):
+                if not len(raw_glyph):
+                    break
+                (
+                    dx, dy,
+                    dx0, dy0, dx1, dy1,
+                    sx0, sy0, sx1, sy1
+                ) = struct.unpack("!10h", raw_glyph)
+                glyphs.append(
+                    Glyph(
+                        i.to_bytes(1, "little"),
+                        (dx, dy),
+                        (sx0, sy0, sx1, sy1),
+                        (dx0, dy0, dx1, dy1),
                     )
-            return cls(glyph_atlas.copy(), ysize, glyphs)
+                )
+            if len(glyphs) != 256:
+                raise PILFontParsingError(f"Incorrect amount of glyphs, expected 256 but got {len(glyphs)}")
+        return cls(atlas, ysize, glyphs)
 
     def save(
         self,
@@ -107,8 +117,10 @@ class PILFont:
         @:param image_path: A path to save the glyph atlas at.
         @:param image_kwargs: Parameters to send to the image saving function.
         """
-        if image_path is not None:
+        if image_path is not None and self.atlas is not None:
             self.atlas.save(image_path, **image_kwargs)
+        if len(self.glyphs) != 256:
+            raise PILFontParsingError(f"Incorrect amount of glyphs, expected 256 but got {len(self.glyphs)}")
         with open(metrics_path, "wb+") as fp:
             fp.write(b"PILfont\n;;;;;;")
             fp.write(str(self.ysize).encode("utf-8"))
