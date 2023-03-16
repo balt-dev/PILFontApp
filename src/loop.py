@@ -255,7 +255,6 @@ class Loop:
                                                     imgui.get_color_u32_rgba(1., 1., 1., min(0.125, self.zoom / 32)),
                                                 )
                             imgui.end()
-                print(self.zoom)
                 for popup in popups:
                     imgui.set_next_window_size(
                         max(window_size[0] * 0.75, 200),
