@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <meta name="description" content="A small visual editor for a proprietary bitmap font format created by the Python Imaging Library team."> <!-- put page description here -->
+    <title>PIL Font Editor</title> <!-- put page title here -->
+    <style>
+        canvas#output {
+            position: absolute;
+            background-color: black;
+            color: white;
+            width: 100%;
+            height: 100%;
+            left: 0;
+            top: 0;
+            z-index: -1;
+        }
+
+        input {
+            display: none;
+        }
+    </style> <!-- put page css here -->
+    <script src="https://flyover.github.io/imgui-js/dist/imgui.umd.js"></script>
+    <script src="https://flyover.github.io/imgui-js/dist/imgui_impl.umd.js"></script>
+</head>
+
+<body>
+    <input type="file" id="file" multiple accept=".pil,.pbm,
+                   image/*" />
+    <canvas id="output" tabindex="1">Your browser failed to load the editor. Try enabling JavaScript or updating your browser.</canvas>
+    <script src="./index.js"></script> <!-- put javascript here -->
+</body>
+
+</html>
