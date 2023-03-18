@@ -4,34 +4,35 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width">
-    <meta name="description" content="A small visual editor for a proprietary bitmap font format created by the Python Imaging Library team."> <!-- put page description here -->
+    <meta name="description" content="A small visual editor for a proprietary bitmap font format created by the Python Imaging Library team."> 
     <meta name="viewport" content="user-scalable=no, width=device-width, initial-scale=1, maximum-scale=1">
-    <title>PIL Font Editor</title> <!-- put page title here -->
+    <title>PIL Font Editor</title> 
     <style>
-        canvas#output {
-            position: absolute;
+        body {
             background-color: black;
             color: white;
+        }
+        canvas#output {
+            position: absolute;
             width: 100%;
             height: 100%;
             left: 0;
             top: 0;
             z-index: -1;
         }
-
         input {
-            display: none;
+            display: none
         }
-    </style> <!-- put page css here -->
+    </style> 
     <script src="https://flyover.github.io/imgui-js/dist/imgui.umd.js"></script>
     <script src="https://flyover.github.io/imgui-js/dist/imgui_impl.umd.js"></script>
 </head>
 
 <body>
-    <input type="file" id="file" multiple accept=".pil,.pbm,
-                   image/*" />
-    <canvas id="output" tabindex="1">Your browser failed to load the editor. Try enabling JavaScript or updating your browser.</canvas>
-    <script src="./index.js"></script> <!-- put javascript here -->
+    <input type="file" id="file" multiple accept=".pil,.pbm,image/*"/>
+    <canvas id="output" tabindex="1"></canvas>
+    <p id="delete">The editor failed to load, try enabling JavaScript or updating your browser.</p>
+    <script src="./index.js"></script> 
 </body>
 
 </html>

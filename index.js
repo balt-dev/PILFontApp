@@ -24,6 +24,124 @@ function check(slice, value) {
     return true;
 }
 
+class Point {
+    constructor(x = 0, y = 0) {
+        this.x = x;
+        this.y = y;
+    }
+
+    copy() {
+        return new Point(this.x, this.y);
+    }
+
+    distance(other) {
+        return Math.sqrt((this.x - other.x) ** 2 + (this.y - other.y) ** 2);
+    }
+}
+
+Point.prototype.toString = function() {
+    return `{"x": ${this.x}, "y": ${this.y}}`;
+}
+
+class Box {
+    constructor(x = 0, y = 0, u = 0, v = 0) {
+        this.x = x;
+        this.y = y;
+        this.u = u;
+        this.v = v;
+    }
+
+    copy() {
+        return new Box(this.x, this.y, this.u, this.v);
+    }
+
+    get xy() {
+        return new Point(this.x, this.y);
+    }
+
+    get uv() {
+        return new Point(this.u, this.v);
+    }
+
+    set xy(pt) {
+        this.x = pt.x;
+        this.y = pt.y;
+    }
+
+    set uv(pt) {
+        this.u = pt.x;
+        this.v = pt.y;
+    }
+
+    get w() {
+        return this.u - this.x;
+    }
+
+    get h() {
+        return this.v - this.y;
+    }
+
+    set w(width) {
+        this.w = this.x + width;
+    }
+
+    set h(height) {
+        this.v = this.y + height;
+    }
+
+    get midpoint() {
+        return new Point((this.u + this.x) / 2, (this.v + this.y) / 2);
+    }
+
+    get area() {
+        return this.w * this.h;
+    }
+
+    get diagonal() {
+        return this.xy.distance(this.uv);
+    }
+
+    contains(pt) {
+        return (
+            this.x <= pt.x & pt.x < this.u &
+            this.y <= pt.y & pt.y < this.v
+        )
+    }
+}
+
+Box.prototype.toString = function() {
+    return `{"x": ${this.x}, "y": ${this.y}, "u": ${this.u}, "v": ${this.v}}`;
+}
+
+class Glyph {
+    constructor(character, delta = new Point(), srcBBox = new Box(), dstBBox = new Box()) {
+        this.character = character;
+        this.delta = delta;
+        this.srcBBox = srcBBox;
+        this.dstBBox = dstBBox;
+    }
+}
+
+Glyph.prototype.toString = function() {
+    return `{"character": ${this.character}, "delta": ${this.delta}, "srcBBox": ${this.srcBBox}, "dstBBox": ${this.dstBBox}}`;
+}
+
+class Font {
+    constructor(ysize = 0, glyphs = new Array(256)) {
+        this.ysize = ysize;
+        this.glyphs = glyphs.slice(); // Clone array
+        for (let i = 0; i < 256; i++) {
+            this.glyphs[i] = new Glyph(String.fromCharCode(i));
+        }
+        Object.seal(this.glyphs);
+    }
+}
+
+Font.prototype.toString = function() {
+    // JSON.stringify throws because of cyclic and I'm too lazy to grab cycle.js
+    return `{"ysize": ${this.ysize}, "glyphs": ${this.glyphs}}`;
+}
+
 function loadFont(buf) {
     // Load font to object
     let index = 0;
@@ -31,11 +149,7 @@ function loadFont(buf) {
     function pop(len) {
         return buf.slice(index, index += len);
     }
-    let font = {
-        "glyphs": new Array(256)
-    };
-    font.glyphs.fill(null);
-    Object.seal(font.glyphs);
+
     if (!check(pop(14), "PILfont\n;;;;;;")) {
         alert("Error while parsing font: Incorrect header");
         return null;
@@ -48,7 +162,7 @@ function loadFont(buf) {
     }
     index -= 1;
     num_arr = new Uint8Array(num_arr);
-    font.ysize = parseInt(decoder.decode(num_arr), 10);
+    font = new Font(parseInt(decoder.decode(num_arr), 10));
     if (!check(pop(7), ";\nDATA\n")) {
         alert("Error while parsing font: Incorrect header");
         return null;
@@ -57,7 +171,6 @@ function loadFont(buf) {
     index = 0;
     let view = new DataView(buf);
     for (let i = 0; i < 256; i++) {
-        let glyph = {};
         let dx = view.getInt16(0 + i * 20);
         let dy = view.getInt16(2 + i * 20);
         let dx0 = view.getInt16(4 + i * 20);
@@ -68,34 +181,23 @@ function loadFont(buf) {
         let sy0 = view.getInt16(14 + i * 20);
         let sx1 = view.getInt16(16 + i * 20);
         let sy1 = view.getInt16(18 + i * 20);
-        glyph.delta = {
-            "x": dx,
-            "y": dy
-        };
-        glyph.dstBBox = {
-            "x": dx0,
-            "y": dy0,
-            "u": dx1,
-            "v": dy1
-        };
-        glyph.srcBBox = {
-            "x": sx0,
-            "y": sy0,
-            "u": sx1,
-            "v": sy1
-        };
-        glyph.character = String.fromCharCode(i);
-        font.glyphs[i] = glyph;
+        font.glyphs[i] = new Glyph(
+            String.fromCharCode(i),
+            new Point(dx, dy),
+            new Box(sx0, sy0, sx1, sy1),
+            new Box(dx0, dy0, dx1, dy1)
+        );
+        console.log(font.glyphs[i]);
     }
     return font;
 }
 
-let offset = {"x": 0, "y": 0};
+let offset = new Point();
 let zoom = 1.0;
 
 // For if the user is using a trackpad
 
-const mouseWheel = {"x": 0, "y": 0};
+const mouseWheel = new Point();
 
 let wheelTimeout;
 let initialZoom = zoom;
@@ -108,7 +210,7 @@ window.addEventListener("wheel", (event) => {
         mouseWheel.x = -event.deltaX / zoom;
         mouseWheel.y = -event.deltaY / zoom;
     }
-    wheelTimeout = setTimeout(()=>{
+    wheelTimeout = setTimeout(() => {
         mouseWheel.x = 0; mouseWheel.y = 0; initialZoom = zoom;
     }, 20);
 }, false);
@@ -117,54 +219,51 @@ window.addEventListener("wheel", (event) => {
 
 let initOffset;
 let initZoom;
-const initTouch = {"bbox": null, "meanPos": null};
-const touch = {"bbox": null, "meanPos": null};
+let initTouch = new Box();
+let touch = new Box();
 
 
 window.addEventListener("touchstart", function (e) {
     e.preventDefault();
-    initOffset = {"x": -offset.x, "y": -offset.y};
+    initOffset = new Point(-offset.x, -offset.y);
     initZoom = zoom;
-    initTouch.bbox = {"x": Infinity, "y": Infinity, "u": -Infinity, "v": -Infinity};
+    initTouch = new Box(Infinity, Infinity, -Infinity, -Infinity);
     for (let i = 0; i < e.touches.length; i++) {
         let t = e.touches[i];
-        initTouch.bbox.x = Math.min(initTouch.bbox.x, t.clientX);
-        initTouch.bbox.y = Math.min(initTouch.bbox.y, t.clientY);
-        initTouch.bbox.u = Math.max(initTouch.bbox.u, t.clientX);
-        initTouch.bbox.v = Math.max(initTouch.bbox.v, t.clientY);
+        initTouch.x = Math.min(initTouch.x, t.clientX);
+        initTouch.y = Math.min(initTouch.y, t.clientY);
+        initTouch.u = Math.max(initTouch.u, t.clientX);
+        initTouch.v = Math.max(initTouch.v, t.clientY);
     }
-    initTouch.meanPos = {
-        "x": (initTouch.bbox.x + initTouch.bbox.u) / 2,
-        "y": (initTouch.bbox.y + initTouch.bbox.v) / 2
-    };
 });
 
 window.addEventListener("touchmove", function (e) {
     e.preventDefault();
-    touch.bbox = {"x": Infinity, "y": Infinity, "u": -Infinity, "v": -Infinity};
+    touch = new Box(Infinity, Infinity, -Infinity, -Infinity);
     for (let t of Array.from(e.touches)) {
-        touch.bbox.x = Math.min(touch.bbox.x, t.clientX);
-        touch.bbox.y = Math.min(touch.bbox.y, t.clientY);
-        touch.bbox.u = Math.max(touch.bbox.u, t.clientX);
-        touch.bbox.v = Math.max(touch.bbox.v, t.clientY);
+        touch.x = Math.min(touch.x, t.clientX);
+        touch.y = Math.min(touch.y, t.clientY);
+        touch.u = Math.max(touch.u, t.clientX);
+        touch.v = Math.max(touch.v, t.clientY);
     }
-    touch.meanPos = {
-        "x": (touch.bbox.x + touch.bbox.u) / 2,
-        "y": (touch.bbox.y + touch.bbox.v) / 2
-    };
-    offset = {
-        "x": -Math.floor(initOffset.x + (touch.meanPos.x - initTouch.meanPos.x) / zoom), 
-        "y": -Math.floor(initOffset.y + (touch.meanPos.y - initTouch.meanPos.y) / zoom)
-    }
+    offset = new Point(
+        -Math.floor(initOffset.x + (touch.x - initTouch.x) / zoom),
+        -Math.floor(initOffset.y + (touch.y - initTouch.y) / zoom)
+    );
     if (e.touches.length > 1) {
-        let rawZoom = Math.max(
-            Math.abs(touch.bbox.u - touch.bbox.x) / Math.abs(initTouch.bbox.u - initTouch.bbox.x),
-            Math.abs(touch.bbox.v - touch.bbox.y) / Math.abs(initTouch.bbox.v - initTouch.bbox.y)
-        );
-        zoom = Math.floor(initZoom * rawZoom);
-        zoom = Math.min(Math.max(zoom, 1), 1 << 4);
+        let rawZoom = touch.diagonal / initTouch.diagonal;
+        zoom = Math.min(Math.max(initZoom * rawZoom, 1), 1 << 4);
     }
 });
+
+function checkEnd(e) {
+    if (e.touches.length == 0) {
+        zoom = Math.floor(zoom);
+    }
+}
+
+window.addEventListener("touchend", checkEnd);
+window.addEventListener("touchcancel", checkEnd);
 
 const canvas = document.getElementById("output");
 
@@ -194,21 +293,29 @@ if (trackpadMode == null) {
     trackpadMode = trackpadMode === "true";
 };
 
-(async function() {
+function textCentered(line, textOffset = 0) {
+    let fontSize = ImGui.CalcTextSize(line);
+    let windowSize = ImGui.GetWindowSize();
+    let offset = (windowSize.x - fontSize.x) / 2 - 8 + textOffset;
+    ImGui.Dummy(new ImGui.Vec2(offset, fontSize.y));
+    ImGui.SameLine(0.0, 0.0);
+    ImGui.Text(line);
+}
+
+(async function () {
     await ImGui.default();
     ImGui.CreateContext();
     ImGui_Impl.Init(canvas);
     const gl = ImGui_Impl.gl;
     done = false;
     // Loop variables
-    let files = null;
     let texture = gl.createTexture();
     texture.image = new Image();
     imageSize = {
         "w": null,
         "h": null
     }
-    pan = {"origin": null, "offset": {"x": 0, "y": 0}}
+    pan = { "origin": null, "offset": new Point() }
     io = ImGui.GetIO();
     font = null;
 
@@ -252,9 +359,6 @@ if (trackpadMode == null) {
     }
 
     let frameTime = performance.now();
-    
-    window.requestAnimationFrame(_loop);
-    const frameDelta = Math.floor(1000 / 60); // Max out at 60 fps for high refresh rate displays
 
     function _loop(time) {
         lastFrameDeltas.push(performance.now() - frameTime);
@@ -267,8 +371,9 @@ if (trackpadMode == null) {
         }
         popups = [];
         menuOffset = 0;
-        screenSize = {w: io.DisplaySize.x, h: io.DisplaySize.y};
+        screenSize = { w: io.DisplaySize.x, h: io.DisplaySize.y };
         mousePos = ImGui.GetMousePos();
+        mousePos = new Point(mousePos.x, mousePos.y);
 
         // --- Drawing the UI ---
         if (ImGui.BeginMainMenuBar()) {
@@ -276,12 +381,16 @@ if (trackpadMode == null) {
             screenSize.y -= menuOffset;
             if (ImGui.BeginMenu("File", true)) {
                 if (ImGui.MenuItem("Open", null, false, true)) {
-                    openFiles().then(loadFiles);
+                    if (window.localStorage.getItem("doNotShowOpen")) {
+                        openFiles().then(loadFiles);
+                    } else {
+                        popups.push("##openAlert");
+                    };
                 }
                 ImGui.EndMenu();
             }
             if (ImGui.BeginMenu("Controls", true)) {
-                ImGui.Text(`- Right click to pan while using mouse`);
+                ImGui.Text(`- Right click to pan, scroll to zoom while using mouse`);
                 ImGui.Text(`- Pinch to zoom, one finger to pan while using touchscreen`);
                 ImGui.Text(`- Pinch to zoom, two fingers to pan while using trackpad`);
                 ImGui.Text(`  - If using trackpad, enable`);
@@ -316,21 +425,20 @@ if (trackpadMode == null) {
                 ImGui.WindowFlags.NoBackground
             )
         )) {
-            let mouseX = mousePos.x;
-            let mouseY = mousePos.y;
-            mouseY -= menuOffset;
+            let mousePosDraw = mousePos.copy();
+            mousePosDraw.y -= menuOffset;
             let drawList = ImGui.GetWindowDrawList();
             let didZoom = Math.abs(io.MouseWheel) > 0 & (!trackpadMode);
             if (ImGui.IsWindowHovered()) {
                 if (io.MouseDown[1]) {
                     if (pan.origin == null) {
-                        pan.origin = {"x": mouseX, "y": mouseY};
-                        pan.offset = {"x": offset.x, "y": offset.y}; // Clone offset
+                        pan.origin = mousePosDraw.copy();
+                        pan.offset = offset.copy(); // Clone offset
                     }
                 } else {
                     if (pan.origin != null) {
                         pan.origin = null;
-                        pan.offset = {"x": 0, "y": 0};
+                        pan.offset = new Point();
                     }
                 }
                 let strength = 2 ** Math.sign(io.MouseWheel);
@@ -340,11 +448,11 @@ if (trackpadMode == null) {
                     let oldZoom = zoom;
                     zoom *= strength;
                     if (1 <= zoom & zoom <= 16) {
-                        offset = {
-                            "x": (offset.x + ((mouseX - screenSize.w / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom)), 
-                            "y": (offset.y + ((mouseY - screenSize.h / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom))
-                        };
-                        pan.offset = {"x": offset.x, "y": offset.y};
+                        offset = new Point(
+                            (offset.x + ((mousePosDraw.x - screenSize.w / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom)),
+                            (offset.y + ((mousePosDraw.y - screenSize.h / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom))
+                        );
+                        pan.offset = offset.copy();
                     }
                     zoom = Math.min(Math.max(zoom, 1), 1 << 4);
                 } else if (trackpadMode) {
@@ -353,18 +461,18 @@ if (trackpadMode == null) {
                 }
                 if (pan.origin != null) {
                     if (didZoom) {
-                        pan.origin = {"x": mouseX, "y": mouseY};
-                        pan.offset = {"x": offset.x, "y": offset.y};
+                        pan.origin = mousePosDraw.copy();
+                        pan.offset = offset.copy();
                     } else {
-                        offset.x = (pan.origin.x - mouseX) / zoom + pan.offset.x;
-                        offset.y = (pan.origin.y - mouseY) / zoom + pan.offset.y;
+                        offset.x = (pan.origin.x - mousePosDraw.x) / zoom + pan.offset.x;
+                        offset.y = (pan.origin.y - mousePosDraw.y) / zoom + pan.offset.y;
                     }
                 }
             }
-            let fixedOffset = {
-                "x": Math.floor(-offset.x * zoom + (screenSize.w / 2)),
-                "y": Math.floor(-offset.y * zoom + (screenSize.h / 2)) + menuOffset
-            };
+            let fixedOffset = new Point(
+                Math.floor(-offset.x * zoom + (screenSize.w / 2)),
+                Math.floor(-offset.y * zoom + (screenSize.h / 2)) + menuOffset
+            );
             if (imageSize.w != null & imageSize.h != null) {
                 drawList.AddImage(
                     texture,
@@ -405,18 +513,15 @@ if (trackpadMode == null) {
                 for (let i = 0; i < 256; i++) {
                     let glyph = font.glyphs[i];
                     if (glyph != null) {
-                        let glyphBBox = {};
-                        glyphBBox.x = Math.floor(glyph.srcBBox.x * zoom + fixedOffset.x);
-                        glyphBBox.y = Math.floor(glyph.srcBBox.y * zoom + fixedOffset.y);
-                        glyphBBox.u = Math.floor(glyph.srcBBox.u * zoom + fixedOffset.x);
-                        glyphBBox.v = Math.floor(glyph.srcBBox.v * zoom + fixedOffset.y);
-                        let borderColor = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(0.5, zoom / 8)));
-                        let fillColor   = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(0.125, zoom / 32)));
-                        if (
-                            ImGui.IsWindowHovered() &
-                            glyphBBox.x <= mousePos.x & mousePos.x < glyphBBox.u &
-                            glyphBBox.y <= mousePos.y & mousePos.y < glyphBBox.v
-                        ) {
+                        let glyphBBox = new Box(
+                            Math.floor(glyph.srcBBox.x * zoom + fixedOffset.x),
+                            Math.floor(glyph.srcBBox.y * zoom + fixedOffset.y),
+                            Math.floor(glyph.srcBBox.u * zoom + fixedOffset.x),
+                            Math.floor(glyph.srcBBox.v * zoom + fixedOffset.y)
+                        );
+                        let borderColor = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.5 / 16)));
+                        let fillColor = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.125 / 16)));
+                        if (ImGui.IsWindowHovered() & glyphBBox.contains(mousePos)) {
                             doDraw = true;
                             borderColor = ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.7);
                             fillColor = ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.3);
@@ -437,7 +542,7 @@ if (trackpadMode == null) {
                             ImGui.EndTooltip();
                             ImGui.PopStyleVar();
                         }
-                        if ((glyphBBox.x != glyphBBox.u) & (glyphBBox.y != glyphBBox.v)) {
+                        if (glyphBBox.area > 0) {
                             drawList.AddRectFilled(
                                 new ImGui.Vec2(glyphBBox.x, glyphBBox.y),
                                 new ImGui.Vec2(glyphBBox.u, glyphBBox.v),
@@ -456,6 +561,35 @@ if (trackpadMode == null) {
         }
         ImGui.PopStyleVar();
 
+        for (let popup of popups) {
+            ImGui.OpenPopup(popup);
+            console.log(popup);
+        }
+        
+        ImGui.SetNextWindowSize(new ImGui.Vec2(0, 0), ImGui.Cond.Once);
+        if (ImGui.BeginPopupModal("##openAlert")) {
+            textCentered("In order to open a font, both a metadata file (.pil)");
+            textCentered("and an atlas file (any image or .pbm)");
+            textCentered("should be opened at once.");
+            ImGui.Dummy(new ImGui.Vec2(1, 5));
+            ImGui.Dummy(
+                new ImGui.Vec2(
+                    ImGui.GetWindowSize().x / 2 - 124, // Hardcoded button width (it won't change so)
+                    0)
+                ); 
+            ImGui.SameLine(0.0, 0.0);
+            if (ImGui.Button("Don't show me this again")) {
+                window.localStorage.setItem("doNotShowOpen", 1);
+                ImGui.CloseCurrentPopup();
+                openFiles().then(loadFiles);
+            };
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel")) {
+                ImGui.CloseCurrentPopup();
+            };
+            ImGui.Dummy(new ImGui.Vec2(388, 0)); // Minimum size
+            ImGui.EndPopup();
+        }
 
         // --- Rendering ---
 
@@ -463,18 +597,18 @@ if (trackpadMode == null) {
         ImGui.Render();
         gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
         gl.clearColor(.1, .1, .1, 1.);
-        
+
         gl.clear(gl.COLOR_BUFFER_BIT);
         ImGui_Impl.RenderDrawData(ImGui.GetDrawData());
-        
+
         for (let i = 0; i < oldKeysDown.length; i++) {
             oldKeysDown[i] = io.KeysDown[i];
         }
-        
+
         if (performance.now() - frameTime >= frameDelta) {
             window.requestAnimationFrame(done ? _done : _loop);
         } else {
-            setTimeout(()=>{
+            setTimeout(() => {
                 window.requestAnimationFrame(done ? _done : _loop);
             }, Math.max(frameDelta - lastFrameDeltas[0], 0));
         }
@@ -484,4 +618,8 @@ if (trackpadMode == null) {
         ImGui_Impl.Shutdown();
         ImGui.DestroyContext();
     }
+
+    const frameDelta = Math.floor(1000 / 60); // Max out at 60 fps for high refresh rate displays
+    document.getElementById("delete").remove();
+    window.requestAnimationFrame(_loop);
 })();
