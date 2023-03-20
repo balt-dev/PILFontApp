@@ -44,11 +44,22 @@ Point.prototype.toString = function() {
 }
 
 class Box {
-    constructor(x = 0, y = 0, u = 0, v = 0) {
-        this.x = x;
-        this.y = y;
-        this.u = u;
-        this.v = v;
+    constructor(x = 0, y = 0, u = null, v = null) {
+        // 2-point constructor
+        if (
+            typeof(x) == "object" & 
+            typeof(y) == "object" &
+            u == null &
+            v == null
+        ) {
+            this.xy = x;
+            this.uv = u;
+        } else { // 4-number constructor
+            this.x = x;
+            this.y = y;
+            this.u = u != null ? u : 0;
+            this.v = v != null ? v : 0;
+        }
     }
 
     copy() {
@@ -82,7 +93,7 @@ class Box {
     }
 
     set w(width) {
-        this.w = this.x + width;
+        this.u = this.x + width;
     }
 
     set h(height) {
@@ -114,16 +125,25 @@ Box.prototype.toString = function() {
 }
 
 class Glyph {
-    constructor(character, delta = new Point(), srcBBox = new Box(), dstBBox = new Box()) {
+    constructor(character = null, delta = new Point(), srcBBox = new Box(), dst = new Point()) {
         this.character = character;
         this.delta = delta;
         this.srcBBox = srcBBox;
-        this.dstBBox = dstBBox;
+        this.dst = dst;
+    }
+
+    copy() {
+        return new Glyph(
+            this.character,
+            this.delta,
+            this.srcBBox,
+            this.dst
+        );
     }
 }
 
 Glyph.prototype.toString = function() {
-    return `{"character": ${this.character}, "delta": ${this.delta}, "srcBBox": ${this.srcBBox}, "dstBBox": ${this.dstBBox}}`;
+    return `{"character": ${this.character}, "delta": ${this.delta}, "srcBBox": ${this.srcBBox}, "dst": ${this.dst}}`;
 }
 
 class Font {
@@ -175,8 +195,10 @@ function loadFont(buf) {
         let dy = view.getInt16(2 + i * 20);
         let dx0 = view.getInt16(4 + i * 20);
         let dy0 = view.getInt16(6 + i * 20);
+        /*
         let dx1 = view.getInt16(8 + i * 20);
         let dy1 = view.getInt16(10 + i * 20);
+        These serve literally no purpose. :P */ 
         let sx0 = view.getInt16(12 + i * 20);
         let sy0 = view.getInt16(14 + i * 20);
         let sx1 = view.getInt16(16 + i * 20);
@@ -185,9 +207,8 @@ function loadFont(buf) {
             String.fromCharCode(i),
             new Point(dx, dy),
             new Box(sx0, sy0, sx1, sy1),
-            new Box(dx0, dy0, dx1, dy1)
+            new Point(dx0, dy0)
         );
-        console.log(font.glyphs[i]);
     }
     return font;
 }
@@ -292,6 +313,16 @@ if (trackpadMode == null) {
 } else {
     trackpadMode = trackpadMode === "true";
 };
+let testingString = `Everyone has the right to a standard of living
+adequate for the health and well-being of themself and of their family,
+including food, clothing, housing and medical care 
+and necessary social services, and the right to security
+in the event of unemployment, sickness, disability,
+widowhood, old age or other lack of livelihood
+in circumstances beyond their control.`;
+let previewOpen = false;
+let editOriginal = new Glyph(null);
+let editPosition = new Point();
 
 function textCentered(line, textOffset = 0) {
     let fontSize = ImGui.CalcTextSize(line);
@@ -389,16 +420,29 @@ function textCentered(line, textOffset = 0) {
                 }
                 ImGui.EndMenu();
             }
+            if (ImGui.BeginMenu("Edit", font != null)) {
+                ImGui.PushItemWidth(100);
+                // I probably should limit the ysize but nah, if people wanna make weird things that's on them
+                ImGui.InputInt("Line Height", (_ = font.ysize) => font.ysize = _);
+                ImGui.PopItemWidth();
+                previewOpen |= ImGui.Button("Open Preview");
+                ImGui.PopItemWidth();
+                ImGui.EndMenu();
+            }
             if (ImGui.BeginMenu("Controls", true)) {
-                ImGui.Text(`- Right click to pan, scroll to zoom while using mouse`);
-                ImGui.Text(`- Pinch to zoom, one finger to pan while using touchscreen`);
-                ImGui.Text(`- Pinch to zoom, two fingers to pan while using trackpad`);
-                ImGui.Text(`  - If using trackpad, enable`);
+                ImGui.Text(`- Right click to pan, scroll to zoom`);
+                ImGui.Text(`  - Pinch to zoom, one finger to pan while using touchscreen`);
+                ImGui.Text(`  - Pinch to zoom, two fingers to pan while using trackpad`);
+                ImGui.Text(`    - If using trackpad, enable`);
                 ImGui.SameLine();
-                ImGui.PushStyleVar(ImGui.StyleVar.FramePadding, new ImGui.Vec2(0, 0));
+                ImGui.PushStyleVar(ImGui.StyleVar.FramePadding, ImGui.Vec2.ZERO);
                 changedMode = ImGui.Checkbox("##trackpad", (_ = trackpadMode) => trackpadMode = _);
                 if (changedMode) window.localStorage.setItem("trackpadMode", trackpadMode);
                 ImGui.PopStyleVar();
+                ImGui.Text(`- Drag center of glyph bounding box to move`);
+                ImGui.Text(`  - Drag sides of glyph bounding box to resize`);
+                ImGui.Text(`  - Hold shift to move baseline offset`);
+                ImGui.Text(`  - Hold control to move delta position (i.e. where the next glyph is placed)`);
                 ImGui.EndMenu();
             }
             ImGui.EndMainMenuBar();
@@ -409,7 +453,9 @@ function textCentered(line, textOffset = 0) {
         ImGui.SetNextWindowPos(
             new ImGui.Vec2(0, menuOffset)
         );
-        ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, new ImGui.Vec2(0, 0));
+
+        // Atlas drawing
+        ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, ImGui.Vec2.ZERO);
         if (ImGui.Begin(
             "Image",
             null,
@@ -480,6 +526,8 @@ function textCentered(line, textOffset = 0) {
                     new ImGui.Vec2(Math.floor(fixedOffset.x + imageSize.w * zoom), Math.floor(fixedOffset.y + imageSize.h * zoom))
                 );
             }
+
+            // FPS and offset display
             let lines = Array.of(
                 `${Math.floor(1000 / (lastFrameDeltas.reduce((a, b) => a + b) / lastFrameDeltas.length))} FPS`,
                 `${Math.floor(offset.x)} ${Math.floor(offset.y)} ${zoom}x`
@@ -503,70 +551,252 @@ function textCentered(line, textOffset = 0) {
                 new ImGui.Vec2(textWidth, menuOffset + textHeight),
                 ImGui.GetColorU32(ImGui.Col.PopupBg)
             );
-            ImGui.PushStyleVar(ImGui.StyleVar.ItemSpacing, new ImGui.Vec2(0, 0));
+            ImGui.PushStyleVar(ImGui.StyleVar.ItemSpacing, ImGui.Vec2.ZERO);
             for (let line of lines) {
                 ImGui.TextDisabled(line);
             }
             ImGui.PopStyleVar();
+
+
+            // Editing
+            let stopEditing = true;
             if (font != null) {
+                let metricsToDraw = [];
                 // The length HAS to be 256. There's no way without tampering to have it not be here.
                 for (let i = 0; i < 256; i++) {
                     let glyph = font.glyphs[i];
                     if (glyph != null) {
-                        let glyphBBox = new Box(
+                        glyph.drawingBBox = new Box(
                             Math.floor(glyph.srcBBox.x * zoom + fixedOffset.x),
                             Math.floor(glyph.srcBBox.y * zoom + fixedOffset.y),
                             Math.floor(glyph.srcBBox.u * zoom + fixedOffset.x),
                             Math.floor(glyph.srcBBox.v * zoom + fixedOffset.y)
                         );
-                        let borderColor = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.5 / 16)));
-                        let fillColor = ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.125 / 16)));
-                        if (ImGui.IsWindowHovered() & glyphBBox.contains(mousePos)) {
-                            doDraw = true;
-                            borderColor = ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.7);
-                            fillColor = ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.3);
-                            ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, new ImGui.Vec2(2, 2));
-                            ImGui.BeginTooltip();
-                            let charNumber = glyph.character.charCodeAt(0);
-                            let drawnChar = charNumber >= 32 ? glyph.character : "?";
-                            ImGui.Text(`Glyph: ${drawnChar} (U+${charNumber.toString(16).padStart(2, "0").toUpperCase()})`);
-                            ImGui.Text(`Source UV: (${glyph.srcBBox.x}, ${glyph.srcBBox.y}), (${glyph.srcBBox.u}, ${glyph.srcBBox.v})`);
-                            ImGui.Text(`Destination UV: (${glyph.dstBBox.x}, ${glyph.dstBBox.y}), (${glyph.dstBBox.u}, ${glyph.dstBBox.v})`);
-                            ImGui.Text(`Delta: ${glyph.delta.x}, ${glyph.delta.y}`);
-                            ImGui.Image(
-                                texture,
-                                new ImGui.Vec2((glyph.srcBBox.u - glyph.srcBBox.x) * zoom, (glyph.srcBBox.v - glyph.srcBBox.y) * zoom),
-                                new ImGui.Vec2(glyph.srcBBox.x / imageSize.w, glyph.srcBBox.y / imageSize.h),
-                                new ImGui.Vec2(glyph.srcBBox.u / imageSize.w, glyph.srcBBox.v / imageSize.h)
-                            );
-                            ImGui.EndTooltip();
-                            ImGui.PopStyleVar();
-                        }
-                        if (glyphBBox.area > 0) {
+                        let drawMetrics = ImGui.IsWindowHovered() & glyph.drawingBBox.contains(mousePos);
+                        if ((drawMetrics & !wasEditing) | glyph.character == editOriginal.character) {
+                            // Editing
+                            if (io.MouseDown[0]) {
+                                stopEditing = false;
+                                if (!wasEditing) {
+                                    editOriginal = glyph.copy();
+                                    editPosition = mousePos.copy();
+                                    wasEditing = true;  
+                                }
+                            } else {
+                                stopEditing = true;
+                            }
+                            metricsToDraw.push(glyph);
+                        } else if (glyph.drawingBBox.area > 0) {
                             drawList.AddRectFilled(
-                                new ImGui.Vec2(glyphBBox.x, glyphBBox.y),
-                                new ImGui.Vec2(glyphBBox.u, glyphBBox.v),
-                                fillColor
+                                new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
+                                new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
+                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.125 / 16)))
                             );
                             drawList.AddRect(
-                                new ImGui.Vec2(glyphBBox.x, glyphBBox.y),
-                                new ImGui.Vec2(glyphBBox.u, glyphBBox.v),
-                                borderColor
+                                new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
+                                new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
+                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.5 / 16)))
                             );
+                        }
+                        if (io.MouseDown[0] & wasEditing & glyph.character == editOriginal.character) {
+                            stopEditing = false;
+                            let mouseOffset = new Point(
+                                Math.floor((editPosition.x - mousePos.x) / zoom),
+                                Math.floor((editPosition.y - mousePos.y) / zoom)
+                            );
+                            if (io.KeyCtrl) {
+                                glyph.delta = new Point(
+                                    editOriginal.delta.x - mouseOffset.x,
+                                    editOriginal.delta.y - mouseOffset.y
+                                );
+                            } else if (io.KeyShift) {
+                                glyph.dst = new Point(
+                                    editOriginal.dst.x + mouseOffset.x,
+                                    editOriginal.dst.y + mouseOffset.y
+                                );
+                            } else {
+                                glyph.srcBBox = new Box(
+                                    editOriginal.srcBBox.x - mouseOffset.x,
+                                    editOriginal.srcBBox.y - mouseOffset.y,
+                                    editOriginal.srcBBox.u - mouseOffset.x,
+                                    editOriginal.srcBBox.v - mouseOffset.y
+                                );
+                            }
                         }
                     }
                 }
+                for (let glyph of metricsToDraw) {
+                    let crossSize = Math.min(3, zoom / 5);
+                    let dstOffset = new Box(
+                        Math.floor((glyph.srcBBox.x - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.srcBBox.y - glyph.dst.y - font.ysize) * zoom + fixedOffset.y),
+                        Math.floor((glyph.srcBBox.u - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.srcBBox.v - glyph.dst.y - font.ysize) * zoom + fixedOffset.y)
+                    );
+                    drawList.AddRectFilled(
+                        new ImGui.Vec2(dstOffset.x, dstOffset.y),
+                        new ImGui.Vec2(dstOffset.u, dstOffset.v),
+                        ImGui.GetColorU32(new ImGui.Vec4(.25, 1., .5, .25))
+                    );
+                    drawList.AddRect(
+                        new ImGui.Vec2(dstOffset.x, dstOffset.y),
+                        new ImGui.Vec2(dstOffset.u, dstOffset.v),
+                        ImGui.GetColorU32(new ImGui.Vec4(.125, 1., .25, 1.))
+                    );
+                    if (!wasEditing) {
+                        ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, new ImGui.Vec2(2, 2));
+                        ImGui.BeginTooltip();
+                        let charNumber = glyph.character.charCodeAt(0);
+                        let drawnChar = charNumber >= 32 ? glyph.character : "?";
+                        ImGui.Text(`Glyph: ${drawnChar} (U+${charNumber.toString(16).padStart(2, "0").toUpperCase()})`);
+                        ImGui.Text(`Source UV: (${glyph.srcBBox.x}, ${glyph.srcBBox.y}), (${glyph.srcBBox.u}, ${glyph.srcBBox.v})`);
+                        ImGui.Text(`Destination: ${glyph.dst.x}, ${glyph.dst.y}`);
+                        ImGui.Text(`Delta: ${glyph.delta.x}, ${glyph.delta.y}`);
+                        ImGui.Image(
+                            texture,
+                            new ImGui.Vec2((glyph.srcBBox.u - glyph.srcBBox.x) * zoom, (glyph.srcBBox.v - glyph.srcBBox.y) * zoom),
+                            new ImGui.Vec2(glyph.srcBBox.x / imageSize.w, glyph.srcBBox.y / imageSize.h),
+                            new ImGui.Vec2(glyph.srcBBox.u / imageSize.w, glyph.srcBBox.v / imageSize.h)
+                        );
+                        ImGui.EndTooltip();
+                        ImGui.PopStyleVar();
+                    }
+                    if (glyph.drawingBBox.area > 0) {
+                        drawList.AddRectFilled(
+                            new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
+                            new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
+                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.3)
+                        );
+                        drawList.AddRect(
+                            new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
+                            new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
+                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.7)
+                        );
+                    }
+                    let RED = ImGui.GetColorU32(new ImGui.Vec4(1., 0., 0., 1.));
+                    let glyphCornerPos = new Point(
+                        Math.floor((glyph.srcBBox.x - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.srcBBox.y - glyph.dst.y) * zoom + fixedOffset.y)
+                    );
+                    drawList.AddLine(
+                        new ImGui.Vec2(
+                            Math.floor(glyphCornerPos.x + (glyph.delta.x * zoom) - 5 * crossSize),
+                            Math.floor(glyphCornerPos.y + (glyph.delta.y * zoom))
+                        ),
+                        new ImGui.Vec2(
+                            Math.ceil(glyphCornerPos.x + (glyph.delta.x * zoom) + 5 * crossSize),
+                            Math.ceil(glyphCornerPos.y + (glyph.delta.y * zoom))
+                        ),
+                        RED,
+                        Math.min(zoom / 5, 3)
+                    );
+                    drawList.AddLine(
+                        new ImGui.Vec2(
+                            Math.floor(glyphCornerPos.x + (glyph.delta.x * zoom)),
+                            Math.floor(glyphCornerPos.y + (glyph.delta.y * zoom) - 5 * crossSize)
+                        ),
+                        new ImGui.Vec2(
+                            Math.ceil(glyphCornerPos.x + (glyph.delta.x * zoom)),
+                            Math.ceil(glyphCornerPos.y + (glyph.delta.y * zoom) + 5 * crossSize)
+                        ),
+                        RED,
+                        Math.min(zoom / 5, 3)
+                    );
+                }
             }
             ImGui.End();
+            if (stopEditing) {
+                editOriginal = new Glyph();
+                wasEditing = false;
+            }
         }
         ImGui.PopStyleVar();
 
         for (let popup of popups) {
             ImGui.OpenPopup(popup);
-            console.log(popup);
         }
         
-        ImGui.SetNextWindowSize(new ImGui.Vec2(0, 0), ImGui.Cond.Once);
+        if (font != null & previewOpen) {
+            // Box stores XYUV, not XYWH, so 2 points should be used instead
+            let glyphsToDraw = [];
+            let glyphPos = new Point();
+            let glyphExtent = new Point();
+            for (let char of testingString) {
+                let index = char.charCodeAt(0);
+                let currentGlyph = font.glyphs[index];
+                let oldPos = glyphPos.copy();
+                if (index == 0x09) {
+                    glyphPos.x += font.glyphs[0x20].delta.x * 4; // Tab => 4 spaces
+                } else if (index == 0x0A) {
+                    glyphPos.x = 0;
+                    glyphPos.y += font.ysize;
+                } else {
+                    if (
+                        !(
+                            (0x00 <= index & index < 0x100)
+                        ) | 
+                        index == 0x0D | // CR
+                        index == 0x7F   // DEL
+                    ) {
+                        // Substitute for ?
+                        index = 0x3F;
+                        currentGlyph = font.glyphs[0x3F];
+                    }
+                    glyphPos.x += currentGlyph.delta.x;
+                    glyphPos.y += currentGlyph.delta.y;
+                }
+                glyphExtent.x = Math.max(
+                    glyphExtent.x + currentGlyph.dst.x, 
+                    glyphPos.x + currentGlyph.dst.x + currentGlyph.srcBBox.w
+                );
+                glyphExtent.y = Math.max(
+                    glyphExtent.y + currentGlyph.dst.y, 
+                    glyphPos.y + font.ysize
+                );
+                glyphsToDraw.push({
+                    "pos": new Point(
+                        oldPos.x + currentGlyph.dst.x,
+                        oldPos.y + font.ysize + currentGlyph.dst.y // Offset from other side
+                    ),
+                    "glyph": index
+                });
+            }
+            ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Appearing);
+            if (ImGui.Begin("Preview", (_ = previewOpen)=>previewOpen = _)) {
+                ImGui.InputTextMultiline("String", (_ = testingString) => testingString = _, 65536, ImGui.Vec2.ZERO, ImGui.InputTextFlags.AllowTabInput);
+                let originPos = ImGui.GetCursorPos();
+                let menuOrigin = ImGui.GetWindowPos();
+                originPos = new Point(originPos.x + menuOrigin.x, originPos.y + menuOrigin.y);
+                ImGui.Dummy(new ImGui.Vec2(Math.max(200, glyphExtent.x), glyphExtent.y));
+                let previewDrawList = ImGui.GetWindowDrawList();
+                for (let glyph of glyphsToDraw) {
+                    // Ignore non-drawn characters
+                    if ([0x09, 0x7F, 0x0D, 0x0A].includes(glyph.glyph)) continue;
+                    glyph.glyph = font.glyphs[glyph.glyph];
+                    previewDrawList.AddImage(
+                        texture,
+                        new ImGui.Vec2(
+                            originPos.x + glyph.pos.x, 
+                            originPos.y + glyph.pos.y
+                        ),
+                        new ImGui.Vec2(
+                            originPos.x + glyph.pos.x + glyph.glyph.srcBBox.w, 
+                            originPos.y + glyph.pos.y + glyph.glyph.srcBBox.h
+                        ),
+                        new ImGui.Vec2(
+                            (glyph.glyph.srcBBox.x) / imageSize.w, 
+                            (glyph.glyph.srcBBox.y) / imageSize.h
+                        ),
+                        new ImGui.Vec2(
+                            (glyph.glyph.srcBBox.u) / imageSize.w, 
+                            (glyph.glyph.srcBBox.v) / imageSize.h
+                        ),
+                    );
+                }
+            }
+            ImGui.End();
+        }
+        ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Once);
         if (ImGui.BeginPopupModal("##openAlert")) {
             textCentered("In order to open a font, both a metadata file (.pil)");
             textCentered("and an atlas file (any image or .pbm)");
