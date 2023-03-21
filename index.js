@@ -2,6 +2,8 @@ const input = document.getElementById("file");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+let currentAlert;
+
 function openFiles() {
     return new Promise((resolve, reject) => {
         input.onchange = _ => {
@@ -135,9 +137,9 @@ class Glyph {
     copy() {
         return new Glyph(
             this.character,
-            this.delta,
-            this.srcBBox,
-            this.dst
+            this.delta.copy(),
+            this.srcBBox.copy(),
+            this.dst.copy()
         );
     }
 }
@@ -198,7 +200,10 @@ function loadFont(buf) {
         /*
         let dx1 = view.getInt16(8 + i * 20);
         let dy1 = view.getInt16(10 + i * 20);
-        These serve literally no purpose. :P */ 
+        These serve literally no purpose, 
+        and without them it could've been 16 bytes per glyph, 
+        but nope :P 
+        */ 
         let sx0 = view.getInt16(12 + i * 20);
         let sy0 = view.getInt16(14 + i * 20);
         let sx1 = view.getInt16(16 + i * 20);
@@ -226,7 +231,7 @@ window.addEventListener("wheel", (event) => {
     clearTimeout(wheelTimeout);
     if (event.ctrlKey) {
         initialZoom -= event.deltaY / 10;
-        zoom = Math.min(16, Math.max(1, Math.floor(initialZoom)));
+        zoom = Math.min(64, Math.max(1, Math.floor(initialZoom)));
     } else {
         mouseWheel.x = -event.deltaX / zoom;
         mouseWheel.y = -event.deltaY / zoom;
@@ -273,7 +278,7 @@ window.addEventListener("touchmove", function (e) {
     );
     if (e.touches.length > 1) {
         let rawZoom = touch.diagonal / initTouch.diagonal;
-        zoom = Math.min(Math.max(initZoom * rawZoom, 1), 1 << 4);
+        zoom = Math.min(Math.max(initZoom * rawZoom, 1), 64);
     }
 });
 
@@ -323,6 +328,16 @@ in circumstances beyond their control.`;
 let previewOpen = false;
 let editOriginal = new Glyph(null);
 let editPosition = new Point();
+let editingSide = null;
+
+const Side = {
+    LEFT: Symbol("Left"),
+    TOP: Symbol("Top"),
+    RIGHT: Symbol("Right"),
+    BOTTOM: Symbol("Bottom")
+}
+
+// The actual editor!
 
 function textCentered(line, textOffset = 0) {
     let fontSize = ImGui.CalcTextSize(line);
@@ -413,7 +428,10 @@ function textCentered(line, textOffset = 0) {
             if (ImGui.BeginMenu("File", true)) {
                 if (ImGui.MenuItem("Open", null, false, true)) {
                     if (window.localStorage.getItem("doNotShowOpen")) {
-                        openFiles().then(loadFiles);
+                        openFiles().then(loadFiles).catch((reason) => {
+                            currentAlert = ""+reason;
+                            popups.push("##openDynamicAlert");
+                        });
                     } else {
                         popups.push("##openAlert");
                     };
@@ -429,7 +447,7 @@ function textCentered(line, textOffset = 0) {
                 ImGui.PopItemWidth();
                 ImGui.EndMenu();
             }
-            if (ImGui.BeginMenu("Controls", true)) {
+            if (ImGui.BeginMenu("Help", true)) {
                 ImGui.Text(`- Right click to pan, scroll to zoom`);
                 ImGui.Text(`  - Pinch to zoom, one finger to pan while using touchscreen`);
                 ImGui.Text(`  - Pinch to zoom, two fingers to pan while using trackpad`);
@@ -439,7 +457,7 @@ function textCentered(line, textOffset = 0) {
                 changedMode = ImGui.Checkbox("##trackpad", (_ = trackpadMode) => trackpadMode = _);
                 if (changedMode) window.localStorage.setItem("trackpadMode", trackpadMode);
                 ImGui.PopStyleVar();
-                ImGui.Text(`- Drag center of glyph bounding box to move`);
+                ImGui.Text(`- Drag glyph bounding box to move`);
                 ImGui.Text(`  - Drag sides of glyph bounding box to resize`);
                 ImGui.Text(`  - Hold shift to move baseline offset`);
                 ImGui.Text(`  - Hold control to move delta position (i.e. where the next glyph is placed)`);
@@ -453,7 +471,9 @@ function textCentered(line, textOffset = 0) {
         ImGui.SetNextWindowPos(
             new ImGui.Vec2(0, menuOffset)
         );
-
+        if (popups.length > 0) {
+            console.log(popups);
+        }
         // Atlas drawing
         ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, ImGui.Vec2.ZERO);
         if (ImGui.Begin(
@@ -488,19 +508,19 @@ function textCentered(line, textOffset = 0) {
                     }
                 }
                 let strength = 2 ** Math.sign(io.MouseWheel);
-                didZoom &= 1 <= zoom * strength & zoom * strength <= 16;
-                zoom = Math.min(Math.max(zoom, 1), 1 << 4);
+                didZoom &= 1 <= zoom * strength & zoom * strength <= 64;
+                zoom = Math.min(Math.max(zoom, 1), 64);
                 if (didZoom) {
                     let oldZoom = zoom;
                     zoom *= strength;
-                    if (1 <= zoom & zoom <= 16) {
+                    if (1 <= zoom & zoom <= 64) {
                         offset = new Point(
                             (offset.x + ((mousePosDraw.x - screenSize.w / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom)),
                             (offset.y + ((mousePosDraw.y - screenSize.h / 2) / Math.max(zoom, oldZoom)) * Math.sign(zoom - oldZoom))
                         );
                         pan.offset = offset.copy();
                     }
-                    zoom = Math.min(Math.max(zoom, 1), 1 << 4);
+                    zoom = Math.min(Math.max(zoom, 1), 64);
                 } else if (trackpadMode) {
                     offset.x -= mouseWheel.x;
                     offset.y -= mouseWheel.y;
@@ -569,34 +589,62 @@ function textCentered(line, textOffset = 0) {
                         glyph.drawingBBox = new Box(
                             Math.floor(glyph.srcBBox.x * zoom + fixedOffset.x),
                             Math.floor(glyph.srcBBox.y * zoom + fixedOffset.y),
-                            Math.floor(glyph.srcBBox.u * zoom + fixedOffset.x),
-                            Math.floor(glyph.srcBBox.v * zoom + fixedOffset.y)
+                            Math.floor(Math.max(glyph.srcBBox.u, glyph.srcBBox.x+1) * zoom + fixedOffset.x),
+                            Math.floor(Math.max(glyph.srcBBox.v, glyph.srcBBox.y+1) * zoom + fixedOffset.y)
                         );
+                        let moveSize = zoom / 4;
                         let drawMetrics = ImGui.IsWindowHovered() & glyph.drawingBBox.contains(mousePos);
-                        if ((drawMetrics & !wasEditing) | glyph.character == editOriginal.character) {
+                        if ((drawMetrics & !wasEditing) | glyph.character == editOriginal.character) {                            
                             // Editing
                             if (io.MouseDown[0]) {
                                 stopEditing = false;
                                 if (!wasEditing) {
                                     editOriginal = glyph.copy();
                                     editPosition = mousePos.copy();
-                                    wasEditing = true;  
+                                    wasEditing = true;
+                                    if ((mousePos.x - glyph.drawingBBox.x) < moveSize) {
+                                        editingSide = Side.LEFT;
+                                    } else if ((mousePos.y - glyph.drawingBBox.y) < moveSize) {
+                                        editingSide = Side.TOP;
+                                    } else if ((glyph.drawingBBox.u - mousePos.x) < moveSize) {
+                                        editingSide = Side.RIGHT;
+                                    } else if ((glyph.drawingBBox.v - mousePos.y) < moveSize) {
+                                        editingSide = Side.BOTTOM;
+                                    } else {
+                                        editingSide = null;
+                                    }
                                 }
                             } else {
                                 stopEditing = true;
                             }
                             metricsToDraw.push(glyph);
                         } else if (glyph.drawingBBox.area > 0) {
+                            let outsideColor = (glyph.srcBBox.u > glyph.srcBBox.x | glyph.srcBBox.v > glyph.srcBBox.y) ?
+                                               ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(16, zoom) * (0.125 / 16))) :
+                                               ImGui.GetColorU32(new ImGui.Vec4(.7, .5, 1., Math.min(16, zoom) * (0.125 / 16)));
+                            let insideColor = (glyph.srcBBox.u > glyph.srcBBox.x | glyph.srcBBox.v > glyph.srcBBox.y) ?
+                                               ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(16, zoom) * (0.5 / 16))) :
+                                               ImGui.GetColorU32(new ImGui.Vec4(.7, .5, 1., Math.min(16, zoom) * (0.5 / 16)));                            
                             drawList.AddRectFilled(
                                 new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
                                 new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
-                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.125 / 16)))
+                                outsideColor
                             );
                             drawList.AddRect(
                                 new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
                                 new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
-                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., zoom * (0.5 / 16)))
+                                insideColor
                             );
+                            let char = glyph.character;
+                            let index = char.charCodeAt(0);
+                            char = index < 0x20 ? "?" : char; 
+                            if (glyph.drawingBBox.w >= 16 & glyph.drawingBBox.h >= 16) {
+                                drawList.AddText(
+                                    new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
+                                    ImGui.GetColorU32(1., 1., 1., 1.),
+                                    `${char} (U+${index.toString(16).padStart(2, "0").toUpperCase()})`
+                                )
+                            }
                         }
                         if (io.MouseDown[0] & wasEditing & glyph.character == editOriginal.character) {
                             stopEditing = false;
@@ -615,12 +663,28 @@ function textCentered(line, textOffset = 0) {
                                     editOriginal.dst.y + mouseOffset.y
                                 );
                             } else {
-                                glyph.srcBBox = new Box(
-                                    editOriginal.srcBBox.x - mouseOffset.x,
-                                    editOriginal.srcBBox.y - mouseOffset.y,
-                                    editOriginal.srcBBox.u - mouseOffset.x,
-                                    editOriginal.srcBBox.v - mouseOffset.y
-                                );
+                                switch (editingSide) {
+                                    case Side.LEFT:
+                                        glyph.srcBBox.x = editOriginal.srcBBox.x - mouseOffset.x;
+                                        break;
+                                    case Side.TOP:
+                                        glyph.srcBBox.y = editOriginal.srcBBox.y - mouseOffset.y;
+                                        break;
+                                    case Side.RIGHT:
+                                        glyph.srcBBox.u = editOriginal.srcBBox.u - mouseOffset.x;
+                                        break;
+                                    case Side.BOTTOM:
+                                        glyph.srcBBox.v = editOriginal.srcBBox.v - mouseOffset.y;
+                                        break;
+                                    default:
+                                        glyph.srcBBox = new Box(
+                                            editOriginal.srcBBox.x - mouseOffset.x,
+                                            editOriginal.srcBBox.y - mouseOffset.y,
+                                            editOriginal.srcBBox.u - mouseOffset.x,
+                                            editOriginal.srcBBox.v - mouseOffset.y
+                                        );
+                                        break;
+                                }
                             }
                         }
                     }
@@ -631,7 +695,7 @@ function textCentered(line, textOffset = 0) {
                         Math.floor((glyph.srcBBox.x - glyph.dst.x) * zoom + fixedOffset.x),
                         Math.floor((glyph.srcBBox.y - glyph.dst.y - font.ysize) * zoom + fixedOffset.y),
                         Math.floor((glyph.srcBBox.u - glyph.dst.x) * zoom + fixedOffset.x),
-                        Math.floor((glyph.srcBBox.v - glyph.dst.y - font.ysize) * zoom + fixedOffset.y)
+                        Math.floor((glyph.srcBBox.v - glyph.dst.y - glyph.srcBBox.h) * zoom + fixedOffset.y)
                     );
                     drawList.AddRectFilled(
                         new ImGui.Vec2(dstOffset.x, dstOffset.y),
@@ -654,7 +718,7 @@ function textCentered(line, textOffset = 0) {
                         ImGui.Text(`Delta: ${glyph.delta.x}, ${glyph.delta.y}`);
                         ImGui.Image(
                             texture,
-                            new ImGui.Vec2((glyph.srcBBox.u - glyph.srcBBox.x) * zoom, (glyph.srcBBox.v - glyph.srcBBox.y) * zoom),
+                            new ImGui.Vec2((glyph.srcBBox.u - glyph.srcBBox.x) * 2, (glyph.srcBBox.v - glyph.srcBBox.y) * 2),
                             new ImGui.Vec2(glyph.srcBBox.x / imageSize.w, glyph.srcBBox.y / imageSize.h),
                             new ImGui.Vec2(glyph.srcBBox.u / imageSize.w, glyph.srcBBox.v / imageSize.h)
                         );
@@ -665,12 +729,15 @@ function textCentered(line, textOffset = 0) {
                         drawList.AddRectFilled(
                             new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
                             new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
-                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.3)
+                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, editingSide != null ? 0.2 : 0.3)
                         );
                         drawList.AddRect(
                             new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
                             new ImGui.Vec2(glyph.drawingBBox.u, glyph.drawingBBox.v),
-                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.7)
+                            ImGui.GetColorU32(ImGui.Col.ButtonHovered, 0.7),
+                            .0,
+                            0,
+                            editingSide != null ? Math.floor(zoom / 8) : 1
                         );
                     }
                     let RED = ImGui.GetColorU32(new ImGui.Vec4(1., 0., 0., 1.));
@@ -708,13 +775,10 @@ function textCentered(line, textOffset = 0) {
             if (stopEditing) {
                 editOriginal = new Glyph();
                 wasEditing = false;
+                editingSide = null;
             }
         }
         ImGui.PopStyleVar();
-
-        for (let popup of popups) {
-            ImGui.OpenPopup(popup);
-        }
         
         if (font != null & previewOpen) {
             // Box stores XYUV, not XYWH, so 2 points should be used instead
@@ -796,6 +860,14 @@ function textCentered(line, textOffset = 0) {
             }
             ImGui.End();
         }
+
+        // Popups
+
+        for (let popup of popups) {
+            ImGui.OpenPopup(popup);
+            console.log(popup);
+        }
+
         ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Once);
         if (ImGui.BeginPopupModal("##openAlert")) {
             textCentered("In order to open a font, both a metadata file (.pil)");
@@ -818,6 +890,15 @@ function textCentered(line, textOffset = 0) {
                 ImGui.CloseCurrentPopup();
             };
             ImGui.Dummy(new ImGui.Vec2(388, 0)); // Minimum size
+            ImGui.EndPopup();
+        }
+        if (ImGui.BeginPopupModal("##openDynamicAlert")) {
+            for (line of currentAlert.split(/\r?\n/)) {
+                textCentered(line);
+            }
+            if (ImGui.Button("Close")) {
+                ImGui.CloseCurrentPopup();
+            };
             ImGui.EndPopup();
         }
 

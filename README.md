@@ -10,14 +10,12 @@
     - [x] Handle drag/drop better, keep target if past bounds in single frmae
   - [x] Shift to move offset, control to move delta
   - [x] Change dst drawing to a box of dstOffset and dstOffset + WH of src
-  - [ ] Fix placement of dstOffset box, it's off
-  - [ ] Resize in outer
-    - Highlight middle w/ move, outside line w/ resize
-  - [ ] Some way of accessing 0x0 glyphs
+    - [x] Resize in outer
+  - [x] Some way of accessing 0x0 glyphs
         (glyphs on top of eachother work fine)
 - [ ] Image replacement
 - [ ] Default state, 16x16 grid with custom font
 - [ ] Glyph saving
   - [ ] Grey out save for invalid states
-  - [ ] Atlas does not need to be saved
+  - Atlas does not need to be saved
 - [ ] Add image to README
