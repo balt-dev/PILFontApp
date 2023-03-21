@@ -1,15 +1,13 @@
-const input = document.getElementById("file");
+const fileInput = document.getElementById("file");
+const imageInput = document.getElementById("imageonly");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 let currentAlert;
 
-function openFiles() {
+function openFiles(input) {
     return new Promise((resolve, reject) => {
         input.onchange = _ => {
-            if (input.files?.length !== 2) {
-                reject("Wrong amount of files selected");
-            }
             resolve(input.files);
         };
         input.click();
@@ -365,6 +363,35 @@ function textCentered(line, textOffset = 0) {
     io = ImGui.GetIO();
     font = null;
 
+    function loadImage(file, reader) {
+        texture.image = new Image();
+        reader.onload = () => {
+            let mime = file.mime;
+            if (file.name.slice(-3) == "pbm") {
+                mime = "image/png";
+            }
+            texture.image.src = "data:" + mime + ";base64," + btoa(reader.result);
+            texture.image.onload = () => {
+                imageSize.w = texture.image.naturalWidth;
+                imageSize.h = texture.image.naturalHeight;
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                gl.texImage2D(
+                    gl.TEXTURE_2D,
+                    0,
+                    gl.RGBA,
+                    gl.RGBA,
+                    gl.UNSIGNED_BYTE,
+                    texture.image
+                );
+            }
+        }
+        reader.readAsBinaryString(file);
+    }
+    
     function loadFiles(files) {
         Array.from(files).forEach(file => {
             let reader = new FileReader();
@@ -374,32 +401,7 @@ function textCentered(line, textOffset = 0) {
                 }
                 reader.readAsArrayBuffer(file);
             } else {
-                texture.image = new Image();
-                reader.onload = () => {
-                    let mime = file.mime;
-                    if (file.name.slice(-3) == "pbm") {
-                        mime = "image/png";
-                    }
-                    texture.image.src = "data:" + mime + ";base64," + btoa(reader.result);
-                    texture.image.onload = () => {
-                        imageSize.w = texture.image.naturalWidth;
-                        imageSize.h = texture.image.naturalHeight;
-                        gl.bindTexture(gl.TEXTURE_2D, texture);
-                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-                        gl.texImage2D(
-                            gl.TEXTURE_2D,
-                            0,
-                            gl.RGBA,
-                            gl.RGBA,
-                            gl.UNSIGNED_BYTE,
-                            texture.image
-                        );
-                    }
-                }
-                reader.readAsBinaryString(file);
+                loadImage(file, reader);
             }
         });
     }
@@ -428,7 +430,7 @@ function textCentered(line, textOffset = 0) {
             if (ImGui.BeginMenu("File", true)) {
                 if (ImGui.MenuItem("Open", null, false, true)) {
                     if (window.localStorage.getItem("doNotShowOpen")) {
-                        openFiles().then(loadFiles).catch((reason) => {
+                        openFiles(fileInput).then(loadFiles, (reason) => {
                             currentAlert = ""+reason;
                             popups.push("##openDynamicAlert");
                         });
@@ -592,7 +594,6 @@ function textCentered(line, textOffset = 0) {
                             Math.floor(Math.max(glyph.srcBBox.u, glyph.srcBBox.x+1) * zoom + fixedOffset.x),
                             Math.floor(Math.max(glyph.srcBBox.v, glyph.srcBBox.y+1) * zoom + fixedOffset.y)
                         );
-                        let moveSize = zoom / 4;
                         let drawMetrics = ImGui.IsWindowHovered() & glyph.drawingBBox.contains(mousePos);
                         if ((drawMetrics & !wasEditing) | glyph.character == editOriginal.character) {                            
                             // Editing
@@ -602,13 +603,14 @@ function textCentered(line, textOffset = 0) {
                                     editOriginal = glyph.copy();
                                     editPosition = mousePos.copy();
                                     wasEditing = true;
-                                    if ((mousePos.x - glyph.drawingBBox.x) < moveSize) {
+                                    console.log(glyph.drawingBBox.w / 4, glyph.drawingBBox.h / 4)
+                                    if ((mousePos.x - glyph.drawingBBox.x) < glyph.drawingBBox.w / 4) {
                                         editingSide = Side.LEFT;
-                                    } else if ((mousePos.y - glyph.drawingBBox.y) < moveSize) {
+                                    } else if ((mousePos.y - glyph.drawingBBox.y) < glyph.drawingBBox.h / 4) {
                                         editingSide = Side.TOP;
-                                    } else if ((glyph.drawingBBox.u - mousePos.x) < moveSize) {
+                                    } else if ((glyph.drawingBBox.u - mousePos.x) < glyph.drawingBBox.w / 4) {
                                         editingSide = Side.RIGHT;
-                                    } else if ((glyph.drawingBBox.v - mousePos.y) < moveSize) {
+                                    } else if ((glyph.drawingBBox.v - mousePos.y) < glyph.drawingBBox.h / 4) {
                                         editingSide = Side.BOTTOM;
                                     } else {
                                         editingSide = null;
@@ -865,7 +867,6 @@ function textCentered(line, textOffset = 0) {
 
         for (let popup of popups) {
             ImGui.OpenPopup(popup);
-            console.log(popup);
         }
 
         ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Once);
@@ -873,6 +874,9 @@ function textCentered(line, textOffset = 0) {
             textCentered("In order to open a font, both a metadata file (.pil)");
             textCentered("and an atlas file (any image or .pbm)");
             textCentered("should be opened at once.");
+            textCentered("It's possible to open one without the other,");
+            textCentered("but you won't get much use out of it until you load");
+            textCentered("the other half of the sprite.");
             ImGui.Dummy(new ImGui.Vec2(1, 5));
             ImGui.Dummy(
                 new ImGui.Vec2(
