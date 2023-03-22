@@ -1,11 +1,13 @@
 const fileInput = document.getElementById("file");
 const imageInput = document.getElementById("imageonly");
+const a = document.getElementById("clickable")
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 let currentAlert;
 
-function openFiles(input) {
+function openFiles(input, allowMultiple = true) {
+    input.multiple = allowMultiple;
     return new Promise((resolve, reject) => {
         input.onchange = _ => {
             resolve(input.files);
@@ -26,8 +28,13 @@ function check(slice, value) {
 
 class Point {
     constructor(x = 0, y = 0) {
-        this.x = x;
-        this.y = y;
+        if (typeof(x) == "object") {
+            this.x = x.x;
+            this.y = x.y;
+        } else {
+            this.x = x;
+            this.y = y;
+        }
     }
 
     copy() {
@@ -36,6 +43,10 @@ class Point {
 
     distance(other) {
         return Math.sqrt((this.x - other.x) ** 2 + (this.y - other.y) ** 2);
+    }
+
+    ImVec2() {
+        return new ImGui.Vec2(this.x, this.y);
     }
 }
 
@@ -70,6 +81,12 @@ class Box {
         return new Point(this.x, this.y);
     }
 
+    get z() {return this.u;}
+    get w() {return this.v;}
+
+    set z(val) {this.u = val;}
+    set w(val) {this.v = val;}
+
     get uv() {
         return new Point(this.u, this.v);
     }
@@ -84,20 +101,20 @@ class Box {
         this.v = pt.y;
     }
 
-    get w() {
+    get width() {
         return this.u - this.x;
     }
 
-    get h() {
+    get height() {
         return this.v - this.y;
     }
 
-    set w(width) {
-        this.u = this.x + width;
+    set width(wid) {
+        this.u = this.x + wid;
     }
 
-    set h(height) {
-        this.v = this.y + height;
+    set height(hgt) {
+        this.v = this.y + hgt;
     }
 
     get midpoint() {
@@ -105,7 +122,7 @@ class Box {
     }
 
     get area() {
-        return this.w * this.h;
+        return this.width * this.height;
     }
 
     get diagonal() {
@@ -118,6 +135,10 @@ class Box {
             this.y <= pt.y & pt.y < this.v
         )
     }
+
+    ImVec4() {
+        return new ImGui.Vec4(this.x, this.y, this.u, this.v);
+    }
 }
 
 Box.prototype.toString = function() {
@@ -125,10 +146,10 @@ Box.prototype.toString = function() {
 }
 
 class Glyph {
-    constructor(character = null, delta = new Point(), srcBBox = new Box(), dst = new Point()) {
+    constructor(character = null, delta = new Point(), src = new Box(), dst = new Point()) {
         this.character = character;
         this.delta = delta;
-        this.srcBBox = srcBBox;
+        this.src = src;
         this.dst = dst;
     }
 
@@ -136,14 +157,14 @@ class Glyph {
         return new Glyph(
             this.character,
             this.delta.copy(),
-            this.srcBBox.copy(),
+            this.src.copy(),
             this.dst.copy()
         );
     }
 }
 
 Glyph.prototype.toString = function() {
-    return `{"character": ${this.character}, "delta": ${this.delta}, "srcBBox": ${this.srcBBox}, "dst": ${this.dst}}`;
+    return `{"character": ${this.character}, "delta": ${this.delta}, "src": ${this.src}, "dst": ${this.dst}}`;
 }
 
 class Font {
@@ -214,6 +235,39 @@ function loadFont(buf) {
         );
     }
     return font;
+}
+
+function saveFont(font) {
+    let prefix = `PILfont
+;;;;;;${font.ysize};
+DATA
+`
+    let buf = new ArrayBuffer(prefix.length + 2 * 10 * 256) // 10 numbers per glyph with 2 bytes per number and 256 glyphs
+    let view = new DataView(buf)
+    for (let i = 0; i < prefix.length; i++) {
+        view.setUint8(i, prefix.charCodeAt(i));
+    }
+    let seek = prefix.length;
+    
+    for (let i = 0; i < 256; i++) {
+        let glyph = font.glyphs[i];
+        view.setInt16(20*i + 0 + seek, glyph.delta.x);
+        view.setInt16(20*i + 2 + seek, glyph.delta.y);
+        view.setInt16(20*i + 4 + seek, glyph.dst.x);
+        view.setInt16(20*i + 6 + seek, glyph.dst.y);
+        view.setInt16(20*i + 8 + seek, glyph.dst.x + glyph.src.width);
+        view.setInt16(20*i + 10 + seek, glyph.dst.y + glyph.src.height);
+        view.setInt16(20*i + 12 + seek, glyph.src.x);
+        view.setInt16(20*i + 14 + seek, glyph.src.y);
+        view.setInt16(20*i + 16 + seek, glyph.src.u);
+        view.setInt16(20*i + 18 + seek, glyph.src.v);
+    }
+    let blob = new Blob([buf], {'type': 'application/octet-stream'});
+    let url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = 'font.pil';
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 let offset = new Point();
@@ -291,11 +345,11 @@ window.addEventListener("touchcancel", checkEnd);
 
 const canvas = document.getElementById("output");
 
-// Expose a few variables for debugging and/or anyone who wants to mess around in the devtools
+// Declare variables
 
 let imageSize;
 let pan;
-let font;
+let font = new Font();
 let done;
 let io;
 let oldKeysDown = new Array(512);
@@ -324,9 +378,21 @@ in the event of unemployment, sickness, disability,
 widowhood, old age or other lack of livelihood
 in circumstances beyond their control.`;
 let previewOpen = false;
+let generatorOpen = false;
 let editOriginal = new Glyph(null);
 let editPosition = new Point();
 let editingSide = null;
+let wasEditing = false;
+let addGlyphOpen = false;
+let addedCharacter = 0x41;
+let genParams = {
+    "columns": 16,
+    "ySize": 12,
+    "dst": new Point(0, 0),
+    "delta": new Point(0, 0),
+    "src": new Point(0, 0),
+    "ignoreControl": true
+}
 
 const Side = {
     LEFT: Symbol("Left"),
@@ -361,9 +427,20 @@ function textCentered(line, textOffset = 0) {
     }
     pan = { "origin": null, "offset": new Point() }
     io = ImGui.GetIO();
-    font = null;
 
-    function loadImage(file, reader) {
+    function initFont() {
+        font = new Font();
+        gl.deleteTexture(texture);
+        texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        imageSize.w = null;
+        imageSize.h = null;
+        generatorOpen = true;
+    }
+
+    function loadImage(file) {
+        let reader = new FileReader();
         texture.image = new Image();
         reader.onload = () => {
             let mime = file.mime;
@@ -387,6 +464,7 @@ function textCentered(line, textOffset = 0) {
                     gl.UNSIGNED_BYTE,
                     texture.image
                 );
+                gl.bindTexture(gl.TEXTURE_2D, null);
             }
         }
         reader.readAsBinaryString(file);
@@ -401,7 +479,7 @@ function textCentered(line, textOffset = 0) {
                 }
                 reader.readAsArrayBuffer(file);
             } else {
-                loadImage(file, reader);
+                loadImage(file);
             }
         });
     }
@@ -428,15 +506,25 @@ function textCentered(line, textOffset = 0) {
             menuOffset = ImGui.GetWindowSize().y;
             screenSize.y -= menuOffset;
             if (ImGui.BeginMenu("File", true)) {
+                if (ImGui.MenuItem("New", null, false, true)) {
+                    if (font != null) {
+                        popups.push("##newAlert");
+                    } else {
+                        initFont();
+                    }
+                }
                 if (ImGui.MenuItem("Open", null, false, true)) {
                     if (window.localStorage.getItem("doNotShowOpen")) {
                         openFiles(fileInput).then(loadFiles, (reason) => {
-                            currentAlert = ""+reason;
+                            currentAlert = `${reason}`;
                             popups.push("##openDynamicAlert");
                         });
                     } else {
                         popups.push("##openAlert");
                     };
+                }
+                if (ImGui.MenuItem("Save", null, false, font != null)) {
+                    saveFont(font);
                 }
                 ImGui.EndMenu();
             }
@@ -446,7 +534,7 @@ function textCentered(line, textOffset = 0) {
                 ImGui.InputInt("Line Height", (_ = font.ysize) => font.ysize = _);
                 ImGui.PopItemWidth();
                 previewOpen |= ImGui.Button("Open Preview");
-                ImGui.PopItemWidth();
+                generatorOpen |= ImGui.Button("Generate Mappings");
                 ImGui.EndMenu();
             }
             if (ImGui.BeginMenu("Help", true)) {
@@ -463,6 +551,14 @@ function textCentered(line, textOffset = 0) {
                 ImGui.Text(`  - Drag sides of glyph bounding box to resize`);
                 ImGui.Text(`  - Hold shift to move baseline offset`);
                 ImGui.Text(`  - Hold control to move delta position (i.e. where the next glyph is placed)`);
+                ImGui.Text(`  - Hold both shift and control and click to open a GUI editor`);
+                ImGui.EndMenu();
+            }
+            if (ImGui.BeginMenu("About", true)) {
+                ImGui.PushTextWrapPos(300);
+                ImGui.TextWrapped(`This is a visual editor for a bitmap font format created by the Python Imaging Library team back in 1996.`);
+                if (ImGui.Button(`GitHub Page`)) {window.open("https://github.com/balt-dev/PILFontApp", "_blank")};
+                ImGui.PopTextWrapPos();
                 ImGui.EndMenu();
             }
             ImGui.EndMainMenuBar();
@@ -473,9 +569,6 @@ function textCentered(line, textOffset = 0) {
         ImGui.SetNextWindowPos(
             new ImGui.Vec2(0, menuOffset)
         );
-        if (popups.length > 0) {
-            console.log(popups);
-        }
         // Atlas drawing
         ImGui.PushStyleVar(ImGui.StyleVar.WindowPadding, ImGui.Vec2.ZERO);
         if (ImGui.Begin(
@@ -589,10 +682,10 @@ function textCentered(line, textOffset = 0) {
                     let glyph = font.glyphs[i];
                     if (glyph != null) {
                         glyph.drawingBBox = new Box(
-                            Math.floor(glyph.srcBBox.x * zoom + fixedOffset.x),
-                            Math.floor(glyph.srcBBox.y * zoom + fixedOffset.y),
-                            Math.floor(Math.max(glyph.srcBBox.u, glyph.srcBBox.x+1) * zoom + fixedOffset.x),
-                            Math.floor(Math.max(glyph.srcBBox.v, glyph.srcBBox.y+1) * zoom + fixedOffset.y)
+                            Math.floor(glyph.src.x * zoom + fixedOffset.x),
+                            Math.floor(glyph.src.y * zoom + fixedOffset.y),
+                            Math.floor(Math.max(glyph.src.u, glyph.src.x+1) * zoom + fixedOffset.x),
+                            Math.floor(Math.max(glyph.src.v, glyph.src.y+1) * zoom + fixedOffset.y)
                         );
                         let drawMetrics = ImGui.IsWindowHovered() & glyph.drawingBBox.contains(mousePos);
                         if ((drawMetrics & !wasEditing) | glyph.character == editOriginal.character) {                            
@@ -603,14 +696,13 @@ function textCentered(line, textOffset = 0) {
                                     editOriginal = glyph.copy();
                                     editPosition = mousePos.copy();
                                     wasEditing = true;
-                                    console.log(glyph.drawingBBox.w / 4, glyph.drawingBBox.h / 4)
-                                    if ((mousePos.x - glyph.drawingBBox.x) < glyph.drawingBBox.w / 4) {
+                                    if ((mousePos.x - glyph.drawingBBox.x) < glyph.drawingBBox.width / 4) {
                                         editingSide = Side.LEFT;
-                                    } else if ((mousePos.y - glyph.drawingBBox.y) < glyph.drawingBBox.h / 4) {
+                                    } else if ((mousePos.y - glyph.drawingBBox.y) < glyph.drawingBBox.height / 4) {
                                         editingSide = Side.TOP;
-                                    } else if ((glyph.drawingBBox.u - mousePos.x) < glyph.drawingBBox.w / 4) {
+                                    } else if ((glyph.drawingBBox.u - mousePos.x) < glyph.drawingBBox.width / 4) {
                                         editingSide = Side.RIGHT;
-                                    } else if ((glyph.drawingBBox.v - mousePos.y) < glyph.drawingBBox.h / 4) {
+                                    } else if ((glyph.drawingBBox.v - mousePos.y) < glyph.drawingBBox.height / 4) {
                                         editingSide = Side.BOTTOM;
                                     } else {
                                         editingSide = null;
@@ -621,10 +713,10 @@ function textCentered(line, textOffset = 0) {
                             }
                             metricsToDraw.push(glyph);
                         } else if (glyph.drawingBBox.area > 0) {
-                            let outsideColor = (glyph.srcBBox.u > glyph.srcBBox.x | glyph.srcBBox.v > glyph.srcBBox.y) ?
+                            let outsideColor = (glyph.src.u > glyph.src.x | glyph.src.v > glyph.src.y) ?
                                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(16, zoom) * (0.125 / 16))) :
                                                ImGui.GetColorU32(new ImGui.Vec4(.7, .5, 1., Math.min(16, zoom) * (0.125 / 16)));
-                            let insideColor = (glyph.srcBBox.u > glyph.srcBBox.x | glyph.srcBBox.v > glyph.srcBBox.y) ?
+                            let insideColor = (glyph.src.u > glyph.src.x | glyph.src.v > glyph.src.y) ?
                                                ImGui.GetColorU32(new ImGui.Vec4(1., 1., 1., Math.min(16, zoom) * (0.5 / 16))) :
                                                ImGui.GetColorU32(new ImGui.Vec4(.7, .5, 1., Math.min(16, zoom) * (0.5 / 16)));                            
                             drawList.AddRectFilled(
@@ -640,7 +732,7 @@ function textCentered(line, textOffset = 0) {
                             let char = glyph.character;
                             let index = char.charCodeAt(0);
                             char = index < 0x20 ? "?" : char; 
-                            if (glyph.drawingBBox.w >= 16 & glyph.drawingBBox.h >= 16) {
+                            if (glyph.drawingBBox.width >= 16 & glyph.drawingBBox.height >= 16) {
                                 drawList.AddText(
                                     new ImGui.Vec2(glyph.drawingBBox.x, glyph.drawingBBox.y),
                                     ImGui.GetColorU32(1., 1., 1., 1.),
@@ -654,36 +746,38 @@ function textCentered(line, textOffset = 0) {
                                 Math.floor((editPosition.x - mousePos.x) / zoom),
                                 Math.floor((editPosition.y - mousePos.y) / zoom)
                             );
-                            if (io.KeyCtrl) {
+                            if (io.KeyCtrl & !io.KeyShift) {
                                 glyph.delta = new Point(
                                     editOriginal.delta.x - mouseOffset.x,
                                     editOriginal.delta.y - mouseOffset.y
                                 );
-                            } else if (io.KeyShift) {
+                            } else if (io.KeyShift & !io.KeyCtrl) {
                                 glyph.dst = new Point(
                                     editOriginal.dst.x + mouseOffset.x,
                                     editOriginal.dst.y + mouseOffset.y
                                 );
+                            } else if (io.KeyCtrl & io.KeyShift) {
+                                addedCharacter = glyph.character.charCodeAt(0);
                             } else {
                                 switch (editingSide) {
                                     case Side.LEFT:
-                                        glyph.srcBBox.x = editOriginal.srcBBox.x - mouseOffset.x;
+                                        glyph.src.x = editOriginal.src.x - mouseOffset.x;
                                         break;
                                     case Side.TOP:
-                                        glyph.srcBBox.y = editOriginal.srcBBox.y - mouseOffset.y;
+                                        glyph.src.y = editOriginal.src.y - mouseOffset.y;
                                         break;
                                     case Side.RIGHT:
-                                        glyph.srcBBox.u = editOriginal.srcBBox.u - mouseOffset.x;
+                                        glyph.src.u = editOriginal.src.u - mouseOffset.x;
                                         break;
                                     case Side.BOTTOM:
-                                        glyph.srcBBox.v = editOriginal.srcBBox.v - mouseOffset.y;
+                                        glyph.src.v = editOriginal.src.v - mouseOffset.y;
                                         break;
                                     default:
-                                        glyph.srcBBox = new Box(
-                                            editOriginal.srcBBox.x - mouseOffset.x,
-                                            editOriginal.srcBBox.y - mouseOffset.y,
-                                            editOriginal.srcBBox.u - mouseOffset.x,
-                                            editOriginal.srcBBox.v - mouseOffset.y
+                                        glyph.src = new Box(
+                                            editOriginal.src.x - mouseOffset.x,
+                                            editOriginal.src.y - mouseOffset.y,
+                                            editOriginal.src.u - mouseOffset.x,
+                                            editOriginal.src.v - mouseOffset.y
                                         );
                                         break;
                                 }
@@ -694,10 +788,10 @@ function textCentered(line, textOffset = 0) {
                 for (let glyph of metricsToDraw) {
                     let crossSize = Math.min(3, zoom / 5);
                     let dstOffset = new Box(
-                        Math.floor((glyph.srcBBox.x - glyph.dst.x) * zoom + fixedOffset.x),
-                        Math.floor((glyph.srcBBox.y - glyph.dst.y - font.ysize) * zoom + fixedOffset.y),
-                        Math.floor((glyph.srcBBox.u - glyph.dst.x) * zoom + fixedOffset.x),
-                        Math.floor((glyph.srcBBox.v - glyph.dst.y - glyph.srcBBox.h) * zoom + fixedOffset.y)
+                        Math.floor((glyph.src.x - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.src.y - glyph.dst.y - font.ysize) * zoom + fixedOffset.y),
+                        Math.floor((glyph.src.u - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.src.v - glyph.dst.y - glyph.src.height) * zoom + fixedOffset.y)
                     );
                     drawList.AddRectFilled(
                         new ImGui.Vec2(dstOffset.x, dstOffset.y),
@@ -715,14 +809,14 @@ function textCentered(line, textOffset = 0) {
                         let charNumber = glyph.character.charCodeAt(0);
                         let drawnChar = charNumber >= 32 ? glyph.character : "?";
                         ImGui.Text(`Glyph: ${drawnChar} (U+${charNumber.toString(16).padStart(2, "0").toUpperCase()})`);
-                        ImGui.Text(`Source UV: (${glyph.srcBBox.x}, ${glyph.srcBBox.y}), (${glyph.srcBBox.u}, ${glyph.srcBBox.v})`);
+                        ImGui.Text(`Source UV: (${glyph.src.x}, ${glyph.src.y}), (${glyph.src.u}, ${glyph.src.v})`);
                         ImGui.Text(`Destination: ${glyph.dst.x}, ${glyph.dst.y}`);
                         ImGui.Text(`Delta: ${glyph.delta.x}, ${glyph.delta.y}`);
                         ImGui.Image(
                             texture,
-                            new ImGui.Vec2((glyph.srcBBox.u - glyph.srcBBox.x) * 2, (glyph.srcBBox.v - glyph.srcBBox.y) * 2),
-                            new ImGui.Vec2(glyph.srcBBox.x / imageSize.w, glyph.srcBBox.y / imageSize.h),
-                            new ImGui.Vec2(glyph.srcBBox.u / imageSize.w, glyph.srcBBox.v / imageSize.h)
+                            new ImGui.Vec2((glyph.src.u - glyph.src.x) * 2, (glyph.src.v - glyph.src.y) * 2),
+                            new ImGui.Vec2(glyph.src.x / imageSize.w, glyph.src.y / imageSize.h),
+                            new ImGui.Vec2(glyph.src.u / imageSize.w, glyph.src.v / imageSize.h)
                         );
                         ImGui.EndTooltip();
                         ImGui.PopStyleVar();
@@ -744,8 +838,8 @@ function textCentered(line, textOffset = 0) {
                     }
                     let RED = ImGui.GetColorU32(new ImGui.Vec4(1., 0., 0., 1.));
                     let glyphCornerPos = new Point(
-                        Math.floor((glyph.srcBBox.x - glyph.dst.x) * zoom + fixedOffset.x),
-                        Math.floor((glyph.srcBBox.y - glyph.dst.y) * zoom + fixedOffset.y)
+                        Math.floor((glyph.src.x - glyph.dst.x) * zoom + fixedOffset.x),
+                        Math.floor((glyph.src.y - glyph.dst.y) * zoom + fixedOffset.y)
                     );
                     drawList.AddLine(
                         new ImGui.Vec2(
@@ -773,6 +867,9 @@ function textCentered(line, textOffset = 0) {
                     );
                 }
             }
+            if (io.MouseDown[0] & io.KeyCtrl & io.KeyShift) {
+                addGlyphOpen = true;
+            }
             ImGui.End();
             if (stopEditing) {
                 editOriginal = new Glyph();
@@ -787,6 +884,7 @@ function textCentered(line, textOffset = 0) {
             let glyphsToDraw = [];
             let glyphPos = new Point();
             let glyphExtent = new Point();
+            let deltaWarning = false;
             for (let char of testingString) {
                 let index = char.charCodeAt(0);
                 let currentGlyph = font.glyphs[index];
@@ -813,7 +911,7 @@ function textCentered(line, textOffset = 0) {
                 }
                 glyphExtent.x = Math.max(
                     glyphExtent.x + currentGlyph.dst.x, 
-                    glyphPos.x + currentGlyph.dst.x + currentGlyph.srcBBox.w
+                    glyphPos.x + currentGlyph.dst.x + currentGlyph.src.width
                 );
                 glyphExtent.y = Math.max(
                     glyphExtent.y + currentGlyph.dst.y, 
@@ -826,10 +924,24 @@ function textCentered(line, textOffset = 0) {
                     ),
                     "glyph": index
                 });
+                if (currentGlyph.delta.y != 0) {
+                    deltaWarning = true;
+                }
             }
             ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Appearing);
             if (ImGui.Begin("Preview", (_ = previewOpen)=>previewOpen = _)) {
                 ImGui.InputTextMultiline("String", (_ = testingString) => testingString = _, 65536, ImGui.Vec2.ZERO, ImGui.InputTextFlags.AllowTabInput);
+                if (deltaWarning) {
+                    let RED = new ImGui.Vec4(1., 0.3, 0.2, 1.); // THIS doesn't use an ImGui.ImU32 ????? 
+                    ImGui.TextColored(
+                        RED,
+                        "Warning: Pixels below the unshifted y-axis boundaries are clipped when drawing the font!"
+                    )
+                    ImGui.TextColored(
+                        RED,
+                        "If you don't want this, set delta y to 0."
+                    )
+                }
                 let originPos = ImGui.GetCursorPos();
                 let menuOrigin = ImGui.GetWindowPos();
                 originPos = new Point(originPos.x + menuOrigin.x, originPos.y + menuOrigin.y);
@@ -846,23 +958,129 @@ function textCentered(line, textOffset = 0) {
                             originPos.y + glyph.pos.y
                         ),
                         new ImGui.Vec2(
-                            originPos.x + glyph.pos.x + glyph.glyph.srcBBox.w, 
-                            originPos.y + glyph.pos.y + glyph.glyph.srcBBox.h
+                            originPos.x + glyph.pos.x + glyph.glyph.src.width, 
+                            originPos.y + glyph.pos.y + glyph.glyph.src.height
                         ),
                         new ImGui.Vec2(
-                            (glyph.glyph.srcBBox.x) / imageSize.w, 
-                            (glyph.glyph.srcBBox.y) / imageSize.h
+                            (glyph.glyph.src.x) / imageSize.w, 
+                            (glyph.glyph.src.y) / imageSize.h
                         ),
                         new ImGui.Vec2(
-                            (glyph.glyph.srcBBox.u) / imageSize.w, 
-                            (glyph.glyph.srcBBox.v) / imageSize.h
+                            (glyph.glyph.src.u) / imageSize.w, 
+                            (glyph.glyph.src.v) / imageSize.h
                         ),
                     );
                 }
             }
             ImGui.End();
         }
+        if (addGlyphOpen & font != null) {
+            ImGui.SetNextWindowPos(new ImGui.Vec2(mousePos.x, mousePos.y), ImGui.Cond.Appearing);
+            ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Appearing);
+            if (ImGui.Begin("Glyph Editor", (_ = addGlyphOpen)=>addGlyphOpen = _)) {
+                let curPos = ImGui.GetCursorPos();
+                ImGui.SetCursorPos(new ImGui.Vec2(curPos.x, curPos.y + 2.));
+                ImGui.Text("Glyph: ");
+                ImGui.SameLine(0.0, 0.0);
+                curPos = ImGui.GetCursorPos();
+                ImGui.SetCursorPos(new ImGui.Vec2(curPos.x, curPos.y - 2.));
+                ImGui.PushStyleVar(ImGui.StyleVar.FramePadding, new ImGui.Vec2(0., 2.));
+                ImGui.PushItemWidth(8);
+                let addedCharString = String.fromCharCode(addedCharacter);
+                let newCharString;
+                ImGui.InputText("##charStrInput", (_ = addedCharString) => newCharString = _, 1, ImGui.InputTextFlags.NoHorizontalScroll);
+                if (ImGui.IsItemEdited()) {
+                    addedCharacter = newCharString.charCodeAt(0);
+                }
+                ImGui.PopItemWidth();
+                ImGui.SameLine(0.0, 0.0);
+                ImGui.Text(" (U+");
+                ImGui.SameLine(0.0, 0.0);
+                ImGui.PushItemWidth(15);
+                let hexChar = addedCharacter.toString(16).padStart(2, "0").toUpperCase();
+                let newHexChar;
+                ImGui.InputText(
+                    "##charHexInput", (_ = hexChar) => newHexChar = _, 2, 
+                    ImGui.InputTextFlags.CharsHexadecimal | ImGui.InputTextFlags.NoHorizontalScroll
+                );
+                if (ImGui.IsItemEdited()) {
+                    addedCharacter = parseInt(newHexChar, 16);
+                }
+                if (!isFinite(addedCharacter)) {
+                    addedCharacter = 0;
+                }
+                ImGui.SameLine(0.0, 0.0);
+                ImGui.Text(")")
+                ImGui.SameLine();
+                ImGui.Dummy(new ImGui.Vec2(4.0, 0.0));
+                ImGui.SameLine();
+                ImGui.PopItemWidth();
+                ImGui.PushItemWidth(75);
+                ImGui.InputInt("##charInt", (_ = addedCharacter) => addedCharacter = _);
+                ImGui.PopItemWidth();
+                ImGui.PopStyleVar();
+                addedCharacter = (addedCharacter + 0x100) % 0x100;
+                let selectedGlyph = font.glyphs[addedCharacter];
+                ImGui.InputInt4("Source UV", selectedGlyph.src);
+                ImGui.InputInt2("Destination", selectedGlyph.dst);
+                ImGui.InputInt2("Delta", selectedGlyph.delta);
+            }
+            ImGui.End();
+        }
 
+        if (generatorOpen) {
+            ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Appearing);
+            if (ImGui.Begin("Generate Mappings", (_ = generatorOpen)=>generatorOpen = _)) {
+                ImGui.TextWrapped("This will override the current mappings with a grid.")
+                ImGui.TextWrapped("In order to generate, UV Size must have a positive area, and a glyph atlas must be open (open one with File > Open.)")
+                ImGui.InputInt("Line Height", (_ = genParams.ySize) => genParams.ySize = _);
+                ImGui.InputInt2("Destination Offset", genParams.dst);
+                ImGui.InputInt2("Delta Offset", genParams.delta);
+                ImGui.InputInt2("UV Size", genParams.src);
+                ImGui.Checkbox("Ignore control characters?", (_ = genParams.ignoreControl) => genParams.ignoreControl = _);
+                if (!(genParams.src.x <= 0 | 
+                    genParams.src.y <= 0 | 
+                    imageSize.w == null |
+                    imageSize.h == null)) {
+                    if (ImGui.Button("Generate")) {
+                        let columns = Math.floor(imageSize.w / genParams.src.x);
+                        let x = 0;
+                        let y = 0;
+                        let iWithSkipped = 0;
+                        for (let i = 0; i < 0x100; i++) {
+                            if (!(genParams.ignoreControl & ((0 <= i & i < 0x20) | (0x7F <= i & i < 0xA0)))) {
+                                x = iWithSkipped % columns;
+                                y = Math.floor(iWithSkipped / columns);
+                                iWithSkipped++;
+                                font.glyphs[i] = new Glyph(
+                                    String.fromCharCode(i),
+                                    new Point(
+                                        genParams.delta.x + genParams.src.x,
+                                        genParams.delta.y
+                                    ),
+                                    new Box(
+                                        x * genParams.src.x,
+                                        y * genParams.src.y,
+                                        (x + 1) * genParams.src.x,
+                                        (y + 1) * genParams.src.y
+                                    ),
+                                    new Point(
+                                        genParams.dst.x,
+                                        genParams.dst.y - genParams.ySize
+                                    )
+                                );
+                            }
+                        }
+                        font.ysize = genParams.ySize;
+                    }
+                } else {
+                    ImGui.PushStyleVar(ImGui.StyleVar.Alpha, 0.3);
+                    ImGui.Button("Generate");
+                    ImGui.PopStyleVar();
+                }
+            }
+            ImGui.End();
+        }
         // Popups
 
         for (let popup of popups) {
@@ -876,21 +1094,21 @@ function textCentered(line, textOffset = 0) {
             textCentered("should be opened at once.");
             textCentered("It's possible to open one without the other,");
             textCentered("but you won't get much use out of it until you load");
-            textCentered("the other half of the sprite.");
-            ImGui.Dummy(new ImGui.Vec2(1, 5));
-            ImGui.Dummy(
-                new ImGui.Vec2(
-                    ImGui.GetWindowSize().x / 2 - 124, // Hardcoded button width (it won't change so)
-                    0)
-                ); 
-            ImGui.SameLine(0.0, 0.0);
-            if (ImGui.Button("Don't show me this again")) {
+            textCentered("the other half of the font.");
+            ImGui.Dummy(new ImGui.Vec2(0, 7));
+            textCentered("Also notable: a font will not open in PIL if it");
+            textCentered("doesn't have a corresponding atlas in the same directory.");
+            textCentered("(e.g. font.pil and font.pbm work)");
+            textCentered("To add to this, the atlas must be saved");
+            textCentered("with exactly 1 color channel.");
+            let buttonSize = new ImGui.Vec2(Math.floor(ImGui.GetContentRegionAvail().x * 0.5) - 4, 0);
+            if (ImGui.Button("Don't show me this again", buttonSize)) {
                 window.localStorage.setItem("doNotShowOpen", 1);
                 ImGui.CloseCurrentPopup();
-                openFiles().then(loadFiles);
+                openFiles(fileInput).then(loadFiles);
             };
             ImGui.SameLine();
-            if (ImGui.Button("Cancel")) {
+            if (ImGui.Button("Cancel", buttonSize)) {
                 ImGui.CloseCurrentPopup();
             };
             ImGui.Dummy(new ImGui.Vec2(388, 0)); // Minimum size
@@ -903,6 +1121,24 @@ function textCentered(line, textOffset = 0) {
             if (ImGui.Button("Close")) {
                 ImGui.CloseCurrentPopup();
             };
+            ImGui.EndPopup();
+        }
+        ImGui.SetNextWindowSize(ImGui.Vec2.ZERO, ImGui.Cond.Once);
+        if (ImGui.BeginPopupModal("##newAlert")) {
+            for (line of `Opening a new file will clear the current font.
+Are you sure you want to do this?`.split(/\r?\n/)) {
+                textCentered(line);
+            }
+            let buttonSize = new ImGui.Vec2(Math.floor(ImGui.GetContentRegionAvail().x * 0.5) - 4, 0);
+            if (ImGui.Button("Ok", buttonSize)) {
+                ImGui.CloseCurrentPopup();
+                initFont();
+            };
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel", buttonSize)) {
+                ImGui.CloseCurrentPopup();
+            };
+            ImGui.Dummy(new ImGui.Vec2(400, 0));
             ImGui.EndPopup();
         }
 

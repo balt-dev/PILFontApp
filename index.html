@@ -20,8 +20,11 @@
             top: 0;
             z-index: -1;
         }
-        input {
-            display: none
+        input#file, input#imageonly, a#clickable {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: 0;
         }
     </style> 
     <script src="https://flyover.github.io/imgui-js/dist/imgui.umd.js"></script>
@@ -29,8 +32,9 @@
 </head>
 
 <body>
-    <input type="file" id="file" multiple accept=".pil,.pbm,image/*"/>
-    <input type="file" id="imageonly" multiple accept="image/*"/>
+    <input type="file" id="file" multiple accept=".pil,.pbm,.png,.gif"/>
+    <input type="file" id="imageonly" multiple accept=".pbm,.png,.gif"/>
+    <a id="clickable"></a>
     <canvas id="output" tabindex="1"></canvas>
     <p id="delete">The editor failed to load, try enabling JavaScript or updating your browser.</p>
     <script src="./index.js"></script> 
